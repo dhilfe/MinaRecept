@@ -50,4 +50,5 @@ Det här dokumentet används för att spåra feature requests när vi jobbar i b
   - Ingen native iOS-kod i denna FR (endast backend-förutsättningar + dokumentation).
 - **Påverkar:** API, auth, docs
 - **Branch:** feature/fr-20251224-03-ios-app-foundation
-- **Status:** requested
+- **Leverans:** docs/API.md + /api-endpoints + API-tester
+- **Status:** ready-for-merge

@@ -74,6 +74,20 @@
 
 ## Fas 2: Externa Integrationer & Avancerade funktioner
 
+- [ ] **iOS-spår: förutsättningar för iOS-app (backend)**
+    - [x] Lägg till REST API-ramverk (DRF) + grundkonfiguration
+    - [x] Token-auth för app (login → token)
+    - [x] CORS-strategi för mobilapp (dev/prod)
+    - [x] API-endpoints (minsta) för app-klient
+        - [x] Recept: lista, detalj, skapa/uppdatera
+        - [x] Inköpslistor: lista, detalj, items (skapa/uppdatera/ta bort)
+        - [x] Veckoplan: hämta aktuell + uppdatera dag
+        - [x] Sparade veckomenyer: lista + detalj
+    - [x] Bild/media: returnera absoluta URL:er till bilder i API
+    - [x] API-tester (unit) för auth + scopes (endast egna data)
+    - [x] Dokumentera API-kontrakt (request/response exempel) för iOS-klienten (se docs/API.md)
+    - [ ] (Senare) Push-notiser/alarmljud: strategi för iOS (native)
+
 - [ ] **API & Arkitektur**
     - [ ] Förbereda API-endpoints (Django REST Framework?)
     - [ ] Token-baserad autentisering för API
