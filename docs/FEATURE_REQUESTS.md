@@ -64,4 +64,4 @@ Det här dokumentet används för att spåra feature requests när vi jobbar i b
   - Tester uppdaterade (minst E2E) som verifierar understrykning.
 - **Påverkar:** templates, templatetags, tests
 - **Branch:** feature/fr-20251224-04-underline-ingredients
-- **Status:** in-progress
+- **Status:** ready-for-merge
