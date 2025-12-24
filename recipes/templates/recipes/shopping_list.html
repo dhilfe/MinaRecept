@@ -1,0 +1,115 @@
+{% extends 'recipes/base.html' %}
+
+{% block content %}
+<div class="row mt-4">
+    <div class="col-md-8 offset-md-2">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div>
+                <a class="text-decoration-none" href="{% url 'shopping_lists' %}">&larr; Inköpslistor</a>
+                <h2 class="mb-0 mt-1">{{ shopping_list.name }}</h2>
+            </div>
+            <div class="d-flex gap-2">
+                <form method="post">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="clear_checked">
+                    <button type="submit" class="btn btn-outline-secondary btn-sm">Ta bort avbockade</button>
+                </form>
+                <form method="post">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="clear_all">
+                    <button type="submit" class="btn btn-outline-danger btn-sm">Rensa inköpslista</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="save">
+
+                    <datalist id="existing-ingredients">
+                        {% for n in existing_names %}
+                            <option value="{{ n }}"></option>
+                        {% endfor %}
+                    </datalist>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle mb-0">
+                            <thead>
+                                <tr class="text-muted">
+                                    <th scope="col" style="width: 34px;"></th>
+                                    <th scope="col" style="width: 44px;"></th>
+                                    <th scope="col" class="text-nowrap" style="width: 80px;">Mängd</th>
+                                    <th scope="col" class="text-nowrap" style="width: 80px;">Enhet</th>
+                                    <th scope="col">Ingrediens</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in items %}
+                                    <tr>
+                                        <td class="py-1">
+                                            <input class="form-check-input" type="checkbox" name="checked_{{ item.id }}" id="checked_{{ item.id }}" {% if item.checked %}checked{% endif %}>
+                                        </td>
+                                        <td class="py-1">
+                                            <button class="btn btn-outline-danger btn-sm px-2" type="submit" name="delete_id" value="{{ item.id }}" title="Ta bort" aria-label="Ta bort">
+                                                <i class="bi bi-trash"></i>
+                                            </button>
+                                        </td>
+                                        <td class="py-1">
+                                            <input type="text" class="form-control form-control-sm" name="amount_{{ item.id }}" value="{{ item.amount|default:'' }}" placeholder="" style="width: 72px;">
+                                        </td>
+                                        <td class="py-1">
+                                            <input type="text" class="form-control form-control-sm" name="unit_{{ item.id }}" value="{{ item.unit|default:'' }}" placeholder="" style="width: 72px;">
+                                        </td>
+                                        <td class="py-1">
+                                            <textarea class="form-control form-control-sm js-autosize" name="name_{{ item.id }}" rows="1" placeholder="Ingrediens" style="resize: none; overflow: hidden; line-height: 1.2;" oninput="this.style.height='auto'; this.style.height=this.scrollHeight+'px';">{{ item.name }}</textarea>
+                                        </td>
+                                    </tr>
+                                {% empty %}
+                                    <tr>
+                                        <td colspan="5" class="text-muted py-2">Inköpslistan är tom.</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                            <tfoot>
+                                <tr>
+                                    <td class="py-1"></td>
+                                    <td class="py-1"></td>
+                                    <td class="py-1">
+                                        <input type="text" class="form-control form-control-sm" name="new_amount" placeholder="" style="width: 72px;">
+                                    </td>
+                                    <td class="py-1">
+                                        <input type="text" class="form-control form-control-sm" name="new_unit" placeholder="" style="width: 72px;">
+                                    </td>
+                                    <td class="py-1">
+                                        <div class="d-flex gap-2">
+                                            <input type="text" class="form-control form-control-sm" name="new_name" placeholder="Skriv ny ingrediens" list="existing-ingredients">
+                                            <button type="submit" class="btn btn-primary btn-sm text-nowrap" name="add_new" value="1">Lägg till</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+
+                    <script>
+                        document.addEventListener('DOMContentLoaded', function () {
+                            document.querySelectorAll('textarea.js-autosize').forEach(function (ta) {
+                                ta.style.height = 'auto';
+                                ta.style.height = ta.scrollHeight + 'px';
+                            });
+                        });
+                    </script>
+
+                    <div class="d-grid mt-2">
+                        <button type="submit" class="btn btn-success">Spara ändringar</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <p class="text-muted small mt-3 mb-0">Tips: bocka av när du handlat.</p>
+    </div>
+</div>
+{% endblock %}

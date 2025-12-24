@@ -1,0 +1,64 @@
+{% extends "recipes/base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card shadow">
+                <div class="card-header bg-primary text-white">
+                    <h2 class="h5 mb-0">Spara till ReceptApp (Bokmärke)</h2>
+                </div>
+                <div class="card-body">
+                    <p class="lead">
+                        Ett enkelt sätt att spara recept från andra sidor (som Instagram, ICA, etc.) är att använda vår "Bokmärkes-knapp".
+                    </p>
+                    
+                    <hr>
+
+                    <h4 class="mt-4">Instruktioner:</h4>
+                    <ol>
+                        <li>Se till att ditt bokmärkesfält är synligt i webbläsaren.</li>
+                        <li>Dra den blå knappen nedan till ditt bokmärkesfält.</li>
+                        <li>När du är på en receptsida du vill spara:
+                            <ul>
+                                <li>Markera texten du vill spara (t.ex. ingredienser och instruktioner).</li>
+                                <li>Klicka på bokmärket "Spara till ReceptApp".</li>
+                            </ul>
+                        </li>
+                    </ol>
+
+                    <div class="text-center my-5">
+                        <a id="bookmarklet-link" href="#" class="btn btn-primary btn-lg" onclick="return false;">
+                            Spara till ReceptApp
+                        </a>
+                        <p class="text-muted small mt-2">
+                            (Dra denna knapp till dina bokmärken)
+                        </p>
+                    </div>
+
+                    <div class="alert alert-info">
+                        <strong>Tips:</strong> Detta fungerar även på sidor som Instagram där vår automatiska import ibland har problem. Markera bara texten i inlägget och klicka på bokmärket!
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Generate the bookmarklet code dynamically based on the current server address
+    document.addEventListener('DOMContentLoaded', function() {
+        var baseUrl = window.location.origin;
+        var code = `javascript:(function(){
+            var title = document.title;
+            var url = window.location.href;
+            var selection = window.getSelection().toString();
+            var targetUrl = '${baseUrl}/recipe/new/?title=' + encodeURIComponent(title) + '&url=' + encodeURIComponent(url) + '&description=' + encodeURIComponent(selection);
+            window.open(targetUrl, '_blank');
+        })();`;
+        
+        var link = document.getElementById('bookmarklet-link');
+        link.href = code;
+    });
+</script>
+{% endblock %}

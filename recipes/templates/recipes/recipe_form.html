@@ -1,0 +1,314 @@
+{% extends 'recipes/base.html' %}
+
+{% block content %}
+<div class="row mt-4">
+    <!-- Main Form Column -->
+    <div class="{% if imported_text %}col-md-7{% else %}col-md-8 offset-md-2{% endif %}">
+        <div class="card">
+            <div class="card-header">
+                {% if form.instance.pk %}Redigera Recept{% else %}Nytt Recept{% endif %}
+            </div>
+            <div class="card-body">
+                <div class="mb-3 text-end">
+                    <button type="button" id="suggest-btn" class="btn btn-outline-info btn-sm">Föreslå kategori & taggar</button>
+                </div>
+                <form method="post" enctype="multipart/form-data">
+                    {% csrf_token %}
+                    
+                    <datalist id="ingredient-list">
+                        {% for name in all_ingredients %}
+                            <option value="{{ name }}">
+                        {% endfor %}
+                    </datalist>
+                    
+                    {% if imported_image_url %}
+                    <div class="alert alert-secondary">
+                        <div class="d-flex align-items-center">
+                            <img src="{{ imported_image_url }}" alt="Importerad bild" style="height: 80px; width: 80px; object-fit: cover; margin-right: 15px;">
+                            <div>
+                                <strong>Importerad bild hittad</strong><br>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="save_imported_image" id="save_imported_image" checked>
+                                    <label class="form-check-label" for="save_imported_image">
+                                        Spara denna bild till receptet
+                                    </label>
+                                </div>
+                                <input type="hidden" name="imported_image_url" value="{{ imported_image_url }}">
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% for field in form %}
+                        {% if field.name == 'ingredients' %}
+                            <div class="mb-3">
+                                <label class="form-label">Ingredienser</label>
+                                {{ field }} <!-- Hidden input -->
+                                <div id="ingredient-editor">
+                                    <!-- Dynamic rows will be added here -->
+                                </div>
+                                <button type="button" class="btn btn-outline-secondary btn-sm mt-2" onclick="addIngredientRow()">+ Lägg till ingrediens</button>
+                                {% if field.help_text %}
+                                    <div class="form-text">{{ field.help_text }}</div>
+                                {% endif %}
+                                {% for error in field.errors %}
+                                    <div class="text-danger">{{ error }}</div>
+                                {% endfor %}
+                            </div>
+                        {% else %}
+                            <div class="mb-3">
+                                <label for="{{ field.id_for_label }}" class="form-label">{{ field.label }}</label>
+                                {{ field }}
+                                {% if field.help_text %}
+                                    <div class="form-text">{{ field.help_text }}</div>
+                                {% endif %}
+                                {% for error in field.errors %}
+                                    <div class="text-danger">{{ error }}</div>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    {% endfor %}
+                    <button type="submit" class="btn btn-success" onclick="serializeIngredients()">Spara</button>
+                    <a href="{% url 'recipe_list' %}" class="btn btn-secondary">Avbryt</a>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import Helper Column -->
+    {% if imported_text %}
+    <div class="col-md-5">
+        <div class="card sticky-top" style="top: 80px;">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0">Import-hjälp</h5>
+            </div>
+            <div class="card-body">
+                <p class="small text-muted">Markera text nedan och klicka på knapparna för att fylla i formuläret.</p>
+                
+                <div class="btn-group w-100 mb-3">
+                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="moveText('title')">Titel</button>
+                    <button type="button" class="btn btn-sm btn-outline-success" onclick="moveText('ingredients')">Ingrediens</button>
+                    <button type="button" class="btn btn-sm btn-outline-warning" onclick="moveText('steps')">Gör så här</button>
+                </div>
+
+                <div class="form-control bg-light" style="height: 400px; overflow-y: auto; white-space: pre-wrap; font-size: 0.9rem;" id="raw-text">{{ imported_text }}</div>
+            </div>
+        </div>
+    </div>
+
+    {% endif %}
+</div>
+
+<script>
+    // Unit Mappings
+    const unitMappings = {
+        'potatis': 'st',
+        'lök': 'st',
+        'morot': 'st',
+        'ägg': 'st',
+        'tomat': 'st',
+        'paprika': 'st',
+        'ris': 'dl',
+        'mjöl': 'dl',
+        'socker': 'dl',
+        'mjölk': 'dl',
+        'grädde': 'dl',
+        'vatten': 'dl',
+        'buljong': 'dl',
+        'linser': 'dl',
+        'couscous': 'dl',
+        'havregryn': 'dl',
+        'olja': 'msk',
+        'soja': 'msk',
+        'vinäger': 'msk',
+        'fond': 'msk',
+        'smör': 'g',
+        'köttfärs': 'g',
+        'kyckling': 'g',
+        'pasta': 'g',
+        'ost': 'g'
+    };
+
+    function checkUnit(input) {
+        const name = input.value.toLowerCase().trim();
+        const row = input.parentElement;
+        const unitInput = row.querySelector('.ing-unit');
+        
+        // Check exact match
+        if (unitMappings[name]) {
+            unitInput.value = unitMappings[name];
+            return;
+        }
+        
+        // Check partial match (e.g. "röd lök" -> "lök")
+        for (const [key, unit] of Object.entries(unitMappings)) {
+            if (name.includes(key)) {
+                unitInput.value = unit;
+                return;
+            }
+        }
+    }
+
+    // Ingredient Editor Logic (Global)
+    const ingredientsInput = document.getElementById('id_ingredients');
+    const editorContainer = document.getElementById('ingredient-editor');
+
+    function createRow(amount='', unit='', name='') {
+        const row = document.createElement('div');
+        row.className = 'input-group mb-2 ingredient-row';
+        row.innerHTML = `
+            <input type="text" class="form-control form-control-sm ing-amount" placeholder="Mängd" value="${amount}" style="max-width: 80px;">
+            <input type="text" class="form-control form-control-sm ing-unit" placeholder="Enhet" value="${unit}" style="max-width: 80px;">
+            <input type="text" class="form-control form-control-sm ing-name" placeholder="Ingrediens" value="${name}" list="ingredient-list" oninput="checkUnit(this)">
+            <button type="button" class="btn btn-outline-danger btn-sm" onclick="this.parentElement.remove()">X</button>
+        `;
+        return row;
+    }
+
+    function addIngredientRow(amount='', unit='', name='') {
+        if (editorContainer) {
+            editorContainer.appendChild(createRow(amount, unit, name));
+        }
+    }
+
+    function serializeIngredients() {
+        const rows = document.querySelectorAll('.ingredient-row');
+        const data = [];
+        rows.forEach(row => {
+            const amount = row.querySelector('.ing-amount').value.trim();
+            const unit = row.querySelector('.ing-unit').value.trim();
+            const name = row.querySelector('.ing-name').value.trim();
+            if (name) {
+                data.push({amount, unit, name});
+            }
+        });
+        if (ingredientsInput) {
+            ingredientsInput.value = JSON.stringify(data);
+        }
+    }
+
+    function parseExistingIngredients() {
+        if (!ingredientsInput || !editorContainer) return;
+        
+        const raw = ingredientsInput.value;
+        if (!raw) {
+            addIngredientRow(); // Add one empty row
+            return;
+        }
+
+        try {
+            // Try parsing as JSON
+            const data = JSON.parse(raw);
+            if (Array.isArray(data)) {
+                data.forEach(item => addIngredientRow(item.amount, item.unit, item.name));
+                return;
+            }
+        } catch (e) {
+            // Not JSON, parse as text (legacy/import)
+            const lines = raw.split('\n');
+            lines.forEach(line => {
+                line = line.trim();
+                if (!line) return;
+                
+                let amount = '', unit = '', name = line;
+
+                // Support fractions like "1/2" and mixed numbers like "1 1/2"
+                const amountPattern = String.raw`(?:\d+\s+\d+\s*\/\s*\d+|\d+\s*\/\s*\d+|\d+(?:[.,]\d+)?)`;
+                
+                // Regex for "Number Unit Name"
+                const match = line.match(new RegExp(`^(${amountPattern})\\s*([a-zA-ZåäöÅÄÖ]+)\\s+(.+)$`));
+                if (match) {
+                    if (match[2].length <= 5) {
+                        amount = match[1];
+                        unit = match[2];
+                        name = match[3];
+                    } else {
+                         const match2 = line.match(new RegExp(`^(${amountPattern})\\s+(.+)$`));
+                         if (match2) {
+                             amount = match2[1];
+                             name = match2[2];
+                         }
+                    }
+                } else {
+                     const match2 = line.match(new RegExp(`^(${amountPattern})\\s+(.+)$`));
+                     if (match2) {
+                         amount = match2[1];
+                         name = match2[2];
+                     }
+                }
+                
+                addIngredientRow(amount, unit, name);
+            });
+        }
+    }
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+        parseExistingIngredients();
+    });
+
+    function moveText(target) {
+        const selection = window.getSelection().toString().trim();
+        if (!selection) return;
+
+        if (target === 'title') {
+            document.getElementById('id_title').value = selection;
+        } else if (target === 'ingredients') {
+            addIngredientRow('', '', selection);
+        } else if (target === 'steps') {
+            const field = document.getElementById('id_steps');
+            field.value = field.value ? field.value + '\n' + selection : selection;
+        }
+    }
+</script>
+
+<script>
+    // Only attach if suggest-btn exists
+    const suggestBtn = document.getElementById('suggest-btn');
+    if (suggestBtn) {
+        suggestBtn.addEventListener('click', function() {
+            const title = document.getElementById('id_title').value.toLowerCase();
+            // We need to get ingredients from the DOM now
+            const rows = document.querySelectorAll('.ingredient-row');
+            let ingredients = "";
+            rows.forEach(row => {
+                ingredients += row.querySelector('.ing-name').value.toLowerCase() + " ";
+            });
+            
+            const text = title + ' ' + ingredients;
+            
+            let typeSelect = document.getElementById('id_dish_type');
+            let tagsInput = document.getElementById('id_tags');
+            let currentTags = tagsInput.value.split(',').map(t => t.trim()).filter(t => t);
+            
+            // Simple rules for Dish Type
+            if (text.includes('socker') || text.includes('choklad') || (text.includes('mjöl') && text.includes('bakpulver'))) {
+                typeSelect.value = 'dessert';
+            } else if (text.includes('linser') || text.includes('bönor') || text.includes('tofu')) {
+                typeSelect.value = 'vegetarian';
+            }
+
+            // Tags
+            const keywords = {
+                'kyckling': 'kyckling',
+                'lax': 'fisk',
+                'torsk': 'fisk',
+                'räkor': 'skaldjur',
+                'pasta': 'pasta',
+                'korv': 'korv',
+                'soppa': 'soppa',
+                'färs': 'färs',
+                'kött': 'kött'
+            };
+            
+            for (const [key, tag] of Object.entries(keywords)) {
+                if (text.includes(key) && !currentTags.includes(tag)) {
+                    currentTags.push(tag);
+                }
+            }
+            
+            tagsInput.value = currentTags.join(', ');
+        });
+    }
+</script>
+{% endblock %}

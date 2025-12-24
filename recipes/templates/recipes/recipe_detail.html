@@ -1,0 +1,131 @@
+{% extends 'recipes/base.html' %}
+
+{% block content %}
+<div class="row mt-4">
+    <div class="col-md-8 offset-md-2">
+        <div class="card">
+            {% if recipe.image %}
+                <img src="{{ recipe.image.url }}" class="card-img-top" alt="{{ recipe.title }}" style="max-height: 400px; object-fit: cover;">
+            {% endif %}
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h1 class="card-title mb-0">{{ recipe.title }}</h1>
+                    <div class="btn-group">
+                        <a href="{% url 'recipe_cook' recipe.pk %}?reset=1" class="btn btn-success">
+                            <i class="bi bi-play-fill"></i> Starta Matlagning
+                        </a>
+                        <a href="{% url 'choose_shopping_list_for_recipe' recipe.pk %}" class="btn btn-outline-primary">
+                            Lägg till i inköpslista
+                        </a>
+                        <a href="{% url 'recipe_update' recipe.pk %}" class="btn btn-outline-warning">Redigera</a>
+                        <a href="{% url 'recipe_delete' recipe.pk %}" class="btn btn-outline-danger">Ta bort</a>
+                    </div>
+                </div>
+                <div class="d-flex flex-wrap align-items-center gap-2 text-muted">
+                    <span class="badge text-bg-light">{{ recipe.cooking_time }} min</span>
+                    <span class="badge text-bg-light">{{ recipe.servings }} portioner</span>
+                    {% if recipe.is_favorite %}
+                        <span class="badge bg-danger">Favorit</span>
+                    {% endif %}
+                    <button class="btn btn-link btn-sm p-0 ms-1" type="button" data-bs-toggle="collapse" data-bs-target="#moreMeta" aria-expanded="false" aria-controls="moreMeta">
+                        Visa mer
+                    </button>
+                </div>
+
+                <div class="collapse mt-2" id="moreMeta">
+                    <div class="text-muted">
+                        <div>{{ recipe.get_dish_type_display }} | {{ recipe.get_difficulty_display }}</div>
+                        {% if recipe.tags %}
+                            <div class="mt-2">
+                                {% for tag in recipe.tags.split %}
+                                    <span class="badge bg-secondary">{{ tag }}</span>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <hr>
+                
+                <div class="row">
+                    <div class="col-md-4">
+                        <h4>Ingredienser</h4>
+                        <div class="mb-3">
+                            <label for="servings-adjust" class="form-label">Antal portioner:</label>
+                            <input type="number" id="servings-adjust" class="form-control form-control-sm" value="{{ recipe.servings }}" style="width: 80px;">
+                        </div>
+                        <ul class="list-group list-group-flush" id="ingredients-list">
+                            {% load recipes_extras %}
+                            {% with ingredients_json=recipe.ingredients|parse_json %}
+                                {% if ingredients_json %}
+                                    {% for item in ingredients_json %}
+                                        <li class="list-group-item" 
+                                            data-amount="{{ item.amount }}" 
+                                            data-unit="{{ item.unit }}" 
+                                            data-name="{{ item.name }}">
+                                            <span class="ing-amount fw-bold">{{ item.amount }}</span>
+                                            <span class="ing-unit">{{ item.unit }}</span>
+                                            <span class="ing-name">{{ item.name }}</span>
+                                        </li>
+                                    {% endfor %}
+                                {% else %}
+                                    <!-- Legacy text format -->
+                                    {% for line in recipe.ingredients.splitlines %}
+                                        <li class="list-group-item">{{ line }}</li>
+                                    {% endfor %}
+                                {% endif %}
+                            {% endwith %}
+                        </ul>
+                    </div>
+                    <div class="col-md-8">
+                        <h4>Gör så här</h4>
+                        <ol class="list-group list-group-numbered">
+                            {% for line in recipe.steps.splitlines %}
+                                <li class="list-group-item">{{ line }}</li>
+                            {% endfor %}
+                        </ol>
+                    </div>
+                </div>
+
+                
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.getElementById('servings-adjust').addEventListener('change', function(e) {
+        const newServings = parseFloat(e.target.value);
+        const originalServings = {{ recipe.servings }};
+        const ratio = newServings / originalServings;
+        
+        const listItems = document.querySelectorAll('#ingredients-list li');
+        listItems.forEach(li => {
+            // Check if we have structured data
+            if (li.dataset.amount !== undefined) {
+                const originalAmount = parseFloat(li.dataset.amount.replace(',', '.'));
+                if (!isNaN(originalAmount)) {
+                    const newAmount = (originalAmount * ratio);
+                    // Format: remove decimals if whole number, else max 2 decimals
+                    let formatted = parseFloat(newAmount.toFixed(2)).toString().replace('.', ',');
+                    li.querySelector('.ing-amount').innerText = formatted;
+                }
+            } else {
+                // Legacy regex fallback
+                if (!li.dataset.original) {
+                    li.dataset.original = li.innerText;
+                }
+                
+                const originalText = li.dataset.original;
+                const newText = originalText.replace(/(\d+([.,]\d+)?)/g, (match) => {
+                    const num = parseFloat(match.replace(',', '.'));
+                    const newNum = (num * ratio);
+                    return parseFloat(newNum.toFixed(2)).toString().replace('.', ',');
+                });
+                
+                li.innerText = newText;
+            }
+        });
+    });
+</script>
+{% endblock %}

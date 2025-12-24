@@ -1,0 +1,32 @@
+{% extends 'recipes/base.html' %}
+
+{% block content %}
+<div class="row mt-5">
+    <div class="col-md-8 offset-md-2">
+        <div class="card">
+            <div class="card-header">
+                Importera recept från länk
+            </div>
+            <div class="card-body">
+                <p>Klistra in en länk till ett recept så försöker vi hämta informationen åt dig.</p>
+                <form method="post">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label for="url" class="form-label">Länk (URL)</label>
+                        <input type="text" class="form-control" id="url" name="url" placeholder="exempel.se/recept/...">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Hämta recept</button>
+                </form>
+
+                <div class="mt-3 text-center">
+                    <a href="{% url 'recipe_create' %}" class="text-muted">Eller skapa manuellt</a>
+                </div>
+            </div>
+        </div>
+        
+        <div class="alert alert-info mt-4">
+            <strong>Tips:</strong> För Instagram och Facebook hämtar vi nu automatiskt bild och text. Du behöver bara klistra in länken ovan!
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,49 @@
+{% extends 'recipes/base.html' %}
+
+{% block content %}
+<div class="row mt-4">
+    <div class="col-md-6 offset-md-3">
+        <div class="card">
+            <div class="card-header">Välj inköpslista</div>
+            <div class="card-body">
+                <p class="text-muted mb-3">Lägg till ingredienser från <strong>{{ recipe.title }}</strong>.</p>
+
+                <form method="post">
+                    {% csrf_token %}
+
+                    <div class="mb-3">
+                        <label class="form-label">Befintlig lista</label>
+                        <select class="form-select" name="list_id">
+                            <option value="">-- Välj --</option>
+                            {% for lst in lists %}
+                                <option value="{{ lst.id }}">{{ lst.name }}{% if lst.is_recurring %} (Återkommande){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Välj en lista, eller skapa en ny nedan.</div>
+                    </div>
+
+                    <hr>
+
+                    <div class="mb-3">
+                        <label class="form-label">Skapa ny lista</label>
+                        <input type="text" class="form-control" name="new_name" placeholder="t.ex. Helghandling">
+                        <div class="form-check mt-2">
+                            <input class="form-check-input" type="checkbox" name="new_is_recurring" id="new_is_recurring" value="1">
+                            <label class="form-check-label" for="new_is_recurring">Återkommande</label>
+                        </div>
+                    </div>
+
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-primary">Lägg till</button>
+                        <a class="btn btn-outline-secondary" href="{% url 'recipe_detail' recipe.pk %}">Avbryt</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <p class="text-muted small mt-3 mb-0">
+            Tips: om receptet redan är tillagt i en lista kommer det blockeras för just den listan.
+        </p>
+    </div>
+</div>
+{% endblock %}

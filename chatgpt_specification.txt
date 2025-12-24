@@ -1,0 +1,29 @@
+## Software specifikation – Recept App
+
+Jag behöver skriva en programvaruspecifikation och jag behöver din hjälp med att formulera den.
+
+Jag vill bygga en receptapp för som förenklar för användare som har konto. När man har appen så behöver väl appen bli länkad till olika andra sidor som användare använder såsom
+Instagram, Facebook, vilka fler? Genom att man på ett enkelt klick väljer när man får upp ett recept i sitt flöde så väljer man typ spara_till_ReceptAPP eller liknande.
+
+Här är några funktioner jag tror att jag behöver:
+- Recepten i appen ska automatisk kategoriseras utefter maträtternas namn eller innehåll.
+
+- Man skall kunna skapa en veckomeny genom en knapptryckning och antingen välja en eller flera rätter själv eller välja
+slumpvis utvalda rätter helt och håller eller slumpa rätter från användarens valda kategorier.
+
+- Man ska kunna välja t.ex Laga något enkelt. Laga en finare middag. 
+
+- Manuellt lägga in recept i appen
+
+- Fota ett recept från en receptbok (som då ska läsas in och läggas in digitalt bland recepten i rätt kategori)
+
+### Plattform och inloggning (stegvis utveckling)
+
+Till att börja med (för att validera funktionalitet och utseende) vill jag använda en enkel webbsida för att köra applikationen.  
+Jag vill att användare i det inledande skedet ska kunna logga in genom att skriva in användarnamn/lösenord som jag har tilldelat dem, men i ett senare skede vill jag att detta ska bli en integrerad lösning, Google-konton och Apple-ID.
+Till en början ska appen vara gratis men tanken är att den ska kopplas mot en betalsida framöver och jag planerar att använda In-App Purchase senare
+Eventuellt begränsa antalet recept till t.ext 10st i gratisversion eller liknande, oändligt många vid betalande.
+
+I den slutliga versionen, när funktionaliteten är validerad, vill jag att detta ska bli en iPhone- och Android-app.  
+Jag vill kunna skicka en länk till användare (en för iOS och förmodligen en annan för Android-användare) som leder dem till installation av appen och, genom att använda sitt Google-konto/Apple-ID, loggas de in automatiskt.
+

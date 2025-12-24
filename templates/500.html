@@ -1,0 +1,12 @@
+{% extends 'recipes/base.html' %}
+
+{% block content %}
+<div class="row mt-5">
+    <div class="col-md-6 offset-md-3 text-center">
+        <h1 class="display-1">500</h1>
+        <h3>Något gick fel</h3>
+        <p>Ett internt fel inträffade. Vi jobbar på att lösa det.</p>
+        <a href="{% url 'recipe_list' %}" class="btn btn-primary">Tillbaka till startsidan</a>
+    </div>
+</div>
+{% endblock %}

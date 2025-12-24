@@ -1,0 +1,12 @@
+{% extends 'recipes/base.html' %}
+
+{% block content %}
+<div class="row mt-5">
+    <div class="col-md-6 offset-md-3 text-center">
+        <h1 class="display-1">404</h1>
+        <h3>Sidan hittades inte</h3>
+        <p>Tyvärr kunde vi inte hitta sidan du letade efter.</p>
+        <a href="{% url 'recipe_list' %}" class="btn btn-primary">Tillbaka till startsidan</a>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,94 @@
+{% extends 'recipes/base.html' %}
+
+{% block content %}
+<div class="row mt-4">
+    <div class="col-md-3">
+        <div class="card mb-4">
+            <div class="card-header">Filter</div>
+            <div class="card-body">
+                <form method="get">
+                    <div class="mb-3">
+                        <label class="form-label">Sök</label>
+                        <input type="text" name="q" class="form-control" value="{{ request.GET.q }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Typ av rätt</label>
+                        <select name="type" class="form-select">
+                            <option value="">Alla</option>
+                            {% for type_code, type_name in type_choices %}
+                                <option value="{{ type_code }}" {% if request.GET.type == type_code %}selected{% endif %}>{{ type_name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Svårighetsgrad</label>
+                        <select name="difficulty" class="form-select">
+                            <option value="">Alla</option>
+                            {% for diff_code, diff_name in difficulty_choices %}
+                                <option value="{{ diff_code }}" {% if request.GET.difficulty == diff_code %}selected{% endif %}>{{ diff_name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Max tid (min)</label>
+                        <input type="number" name="max_time" class="form-control" value="{{ request.GET.max_time }}">
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" name="favorites" id="favorites" value="true" {% if request.GET.favorites %}checked{% endif %}>
+                        <label class="form-check-label" for="favorites">
+                            Visa endast favoriter
+                        </label>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Filtrera</button>
+                    <a href="{% url 'recipe_list' %}" class="btn btn-outline-secondary w-100 mt-2">Rensa</a>
+                </form>
+                <hr>
+                <div class="d-grid gap-2">
+                    <a href="?difficulty=easy&max_time=30" class="btn btn-success">Laga något enkelt</a>
+                    <a href="?difficulty=hard&type=party" class="btn btn-warning">Laga en finare middag</a>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-9">
+        <h2>Mina Recept</h2>
+        <div class="row">
+            {% for recipe in recipes %}
+                <div class="col-md-4">
+                    <div class="card recipe-card">
+                        {% if recipe.image %}
+                            <img src="{{ recipe.image.url }}" class="card-img-top recipe-img" alt="{{ recipe.title }}">
+                        {% else %}
+                            <div class="card-img-top recipe-img bg-secondary d-flex align-items-center justify-content-center text-white">
+                                Ingen bild
+                            </div>
+                        {% endif %}
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start gap-2">
+                                <h5 class="card-title mb-1">{{ recipe.title }}</h5>
+                                {% if recipe.is_favorite %}
+                                    <span class="badge bg-danger">Favorit</span>
+                                {% endif %}
+                            </div>
+
+                            <div class="d-flex flex-wrap gap-2 text-muted mb-3">
+                                <span class="badge text-bg-light">{{ recipe.cooking_time }} min</span>
+                                <span class="badge text-bg-light">{{ recipe.servings }} port</span>
+                            </div>
+
+                            <div class="d-grid gap-2">
+                                <a href="{% url 'recipe_cook' recipe.pk %}?reset=1" class="btn btn-success btn-sm">Starta Matlagning</a>
+                                <a href="{% url 'recipe_detail' recipe.pk %}" class="btn btn-outline-primary btn-sm">Visa</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            {% empty %}
+                <div class="col-12">
+                    <p>Inga recept hittades. <a href="{% url 'recipe_create' %}">Skapa ett nytt!</a></p>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}

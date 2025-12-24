@@ -1,0 +1,982 @@
+{% extends 'recipes/base.html' %}
+{% load recipes_extras %}
+
+{% block content %}
+<style>
+    /* Cook Mode Specific Styles */
+    body { padding-top: 0 !important; }
+    nav.navbar { display: none !important; }
+    main.container { max-width: 100% !important; padding: 0 !important; }
+    body {
+        background-color: #f8f9fa;
+    }
+    .exit-cook {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        z-index: 1100;
+    }
+    .cook-container {
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+        position: relative;
+        overflow: hidden;
+        padding: 16px;
+        padding-bottom: 110px; /* space for nav controls */
+    }
+    .step-card {
+        display: none;
+        width: 100%;
+        max-width: 800px;
+        padding: 2rem;
+        animation: fadeIn 0.3s ease-in-out;
+        text-align: left;
+    }
+    .step-card.active {
+        display: block;
+    }
+    .step-text {
+        font-size: 2.5rem;
+        font-weight: 500;
+        line-height: 1.4;
+        color: #212529;
+        text-align: left;
+    }
+    @media (min-width: 992px) {
+        .step-text { font-size: 3rem; }
+    }
+    @media (max-width: 576px) {
+        .step-card { padding: 1.25rem; }
+        .step-text { font-size: 2.1rem; }
+    }
+    .step-number {
+        font-size: 1.2rem;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        color: #6c757d;
+        margin-bottom: 1rem;
+    }
+    .nav-controls {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        padding: 20px;
+        background: white;
+        box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        z-index: 1000;
+    }
+    .timer-bar {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 92px;
+        padding: 10px 16px;
+        background: rgba(255, 255, 255, 0.95);
+        border-top: 1px solid rgba(0,0,0,0.06);
+        z-index: 1000;
+        display: none;
+        backdrop-filter: blur(6px);
+    }
+    .timer-bar.show { display: block; }
+    .timer-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: #f1f3f5;
+        color: #212529;
+        font-weight: 600;
+        margin-right: 8px;
+        margin-bottom: 8px;
+        white-space: nowrap;
+    }
+    .timer-chip small { font-weight: 500; color: #6c757d; }
+    .timer-chip button {
+        border: none;
+        background: transparent;
+        color: #6c757d;
+        padding: 0;
+        line-height: 1;
+        font-size: 18px;
+    }
+
+    .ing-checked {
+        opacity: 0.55;
+        text-decoration: line-through;
+    }
+    .btn-nav {
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        font-size: 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .ingredients-panel {
+        position: fixed;
+        top: 0;
+        right: -350px;
+        width: 350px;
+        height: 100%;
+        background: white;
+        box-shadow: -2px 0 10px rgba(0,0,0,0.1);
+        transition: right 0.3s ease;
+        z-index: 1050;
+        padding: 20px;
+        overflow-y: auto;
+        padding-top: 80px; /* Space for close button */
+    }
+    .ingredients-panel.open {
+        right: 0;
+    }
+    .ingredients-toggle {
+        position: fixed;
+        top: 80px;
+        right: 20px;
+        z-index: 1040;
+    }
+    
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Timer Styles */
+    .timer-link {
+        color: #0d6efd;
+        cursor: pointer;
+        text-decoration: underline;
+        text-decoration-style: dotted;
+    }
+    .timer-active {
+        background-color: #e7f1ff;
+        padding: 2px 5px;
+        border-radius: 4px;
+        font-weight: bold;
+    }
+    .step-timers {
+        margin-top: 1.25rem;
+    }
+
+    .alarm-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.55);
+        z-index: 2000;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+    }
+    .alarm-overlay.show { display: flex; }
+    .alarm-overlay .card {
+        width: 100%;
+        max-width: 520px;
+    }
+</style>
+
+<a class="btn btn-light shadow-sm exit-cook" href="{% url 'recipe_detail' recipe.pk %}">Avsluta</a>
+
+<div class="timer-bar" id="timerBar" aria-live="polite"></div>
+
+<div class="alarm-overlay" id="alarmOverlay" role="dialog" aria-modal="true" aria-label="Timer klar">
+    <div class="card shadow">
+        <div class="card-body p-4 text-center">
+            <div class="display-6 mb-2">⏰ Timer klar!</div>
+            <div class="text-muted mb-3" id="alarmText">Tryck mellanslag/Enter eller tryck på knappen för att bekräfta.</div>
+            <button type="button" class="btn btn-primary btn-lg" id="alarmAckBtn">Bekräfta</button>
+        </div>
+    </div>
+</div>
+
+<!-- Ingredients Panel -->
+<div class="ingredients-panel" id="ingredientsPanel">
+    <button class="btn btn-close position-absolute top-0 end-0 m-3" onclick="toggleIngredients()"></button>
+    <h3 class="mb-4">Ingredienser</h3>
+    <div class="mb-3">
+        <label for="cook-servings" class="form-label">Antal portioner</label>
+        <input type="number" id="cook-servings" class="form-control form-control-sm" value="{{ recipe.servings }}" style="width: 120px;">
+        <div class="form-text">Skalar ingredienserna automatiskt.</div>
+    </div>
+    <ul class="list-group list-group-flush">
+        {% with ingredients_json=recipe.ingredients|parse_json %}
+            {% if ingredients_json %}
+                {% for item in ingredients_json %}
+                    <li class="list-group-item"
+                        data-ingid="ing-{{ forloop.counter0 }}"
+                        data-amount="{{ item.amount }}"
+                        data-unit="{{ item.unit }}"
+                        data-name="{{ item.name }}">
+                        <strong><span class="ing-amount">{{ item.amount }}</span> <span class="ing-unit">{{ item.unit }}</span></strong>
+                        <span class="ing-name">{{ item.name }}</span>
+                    </li>
+                {% endfor %}
+            {% else %}
+                {% for line in recipe.ingredients.splitlines %}
+                    <li class="list-group-item" data-ingid="ing-{{ forloop.counter0 }}">{{ line }}</li>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+    </ul>
+</div>
+
+<button class="btn btn-light shadow-sm ingredients-toggle rounded-pill px-3" onclick="toggleIngredients()">
+    Ingredienser
+</button>
+
+<div class="container">
+    <div class="cook-container" tabindex="-1">
+        <!-- Intro Card -->
+        <div class="step-card active text-center" id="step-0" style="text-align:center;">
+            <h1 class="display-3 mb-4">{{ recipe.title }}</h1>
+            <p class="lead text-muted">Dags att laga mat! Se till att du har alla ingredienser redo.</p>
+            {% if recipe.image %}
+                <img src="{{ recipe.image.url }}" class="img-fluid rounded shadow-sm mt-3" style="max-height: 300px; object-fit: cover;">
+            {% endif %}
+        </div>
+
+        <!-- Steps -->
+        {% for line in recipe.steps.splitlines %}
+            {% if line|length > 0 %}
+            <div class="step-card" id="step-{{ forloop.counter }}">
+                <div class="step-number">Steg {{ forloop.counter }}</div>
+                <div class="step-text">{{ line }}</div>
+            </div>
+            {% endif %}
+        {% endfor %}
+
+        <!-- Finish Card -->
+        <div class="step-card text-center" id="step-finish" style="text-align:center;">
+            <h1 class="display-1 text-success mb-4">Klart</h1>
+            <h2 class="mb-3">Smaklig måltid</h2>
+            <a href="{% url 'recipe_detail' recipe.pk %}" class="btn btn-outline-primary btn-lg mt-3">Tillbaka till receptet</a>
+        </div>
+    </div>
+</div>
+
+<!-- Navigation Controls -->
+<div class="nav-controls">
+    <button class="btn btn-outline-secondary btn-nav" onclick="prevStep()" id="prevBtn" disabled>
+        <i class="bi bi-arrow-left"></i>
+    </button>
+
+    <div class="d-flex align-items-center gap-3 flex-grow-1 px-3" style="min-width: 0;">
+        <div class="progress flex-grow-1" style="height: 6px;">
+            <div class="progress-bar bg-success" role="progressbar" style="width: 0%" id="progressBar"></div>
+        </div>
+        <button class="btn btn-outline-secondary btn-sm" type="button" onclick="restartCook()">Starta om</button>
+    </div>
+
+    <button class="btn btn-primary btn-nav" onclick="nextStep()" id="nextBtn">
+        <i class="bi bi-arrow-right"></i>
+    </button>
+</div>
+
+<script>
+    let currentStep = 0;
+    const recipeId = {{ recipe.pk }};
+    const storageKey = `cookStep:${recipeId}`;
+    const servingsKey = `cookServings:${recipeId}`;
+    const checkedKey = `cookCheckedIngredients:${recipeId}`;
+    // Calculate total steps: Intro (0) + Actual Steps + Finish
+    // We need to count the actual step divs rendered
+    const stepCards = document.querySelectorAll('.step-card');
+    const totalSteps = stepCards.length - 1;
+
+    // Restore last step if available
+    try {
+        const saved = parseInt(localStorage.getItem(storageKey) || '0', 10);
+        if (!isNaN(saved)) {
+            currentStep = Math.max(0, Math.min(saved, totalSteps));
+        }
+    } catch (e) {
+        // ignore
+    }
+
+    // If the user explicitly started Cook Mode from a "Starta matlagning" button,
+    // always start from the beginning.
+    try {
+        const params = new URLSearchParams(window.location.search || '');
+        if (params.get('reset') === '1') {
+            currentStep = 0;
+            try { localStorage.removeItem(storageKey); } catch (e) {}
+        }
+    } catch (e) {
+        // ignore
+    }
+
+    // If the last saved step was the Finish card, start fresh next time.
+    if (currentStep === totalSteps) {
+        currentStep = 0;
+        try { localStorage.removeItem(storageKey); } catch (e) {}
+    }
+
+    // Servings scaling in ingredient panel (structured ingredients only)
+    const originalServings = {{ recipe.servings }};
+    const servingsInput = document.getElementById('cook-servings');
+
+    function applyCookServingsScale(newServings) {
+        if (!newServings || !originalServings) return;
+        const ratio = newServings / originalServings;
+        const items = document.querySelectorAll('#ingredientsPanel li[data-amount]');
+        items.forEach(li => {
+            const rawAmount = (li.dataset.amount || '').toString().trim();
+            const originalAmount = parseFloat(rawAmount.replace(',', '.'));
+            if (isNaN(originalAmount)) return;
+            const scaled = originalAmount * ratio;
+            const formatted = parseFloat(scaled.toFixed(2)).toString().replace('.', ',');
+            const el = li.querySelector('.ing-amount');
+            if (el) el.innerText = formatted;
+        });
+    }
+
+    function restoreCookServings() {
+        if (!servingsInput) return;
+        try {
+            const savedServings = parseFloat(localStorage.getItem(servingsKey) || '');
+            if (!isNaN(savedServings) && savedServings > 0) {
+                servingsInput.value = savedServings;
+                applyCookServingsScale(savedServings);
+            } else {
+                applyCookServingsScale(parseFloat(servingsInput.value));
+            }
+        } catch (e) {
+            applyCookServingsScale(parseFloat(servingsInput.value));
+        }
+    }
+
+    if (servingsInput) {
+        servingsInput.addEventListener('input', function(e) {
+            const v = parseFloat(e.target.value);
+            if (!isNaN(v) && v > 0) {
+                applyCookServingsScale(v);
+                try { localStorage.setItem(servingsKey, String(v)); } catch (err) {}
+            }
+        });
+    }
+
+    // Ingredient checklist (persist per recipe)
+    function loadCheckedSet() {
+        try {
+            const raw = localStorage.getItem(checkedKey);
+            if (!raw) return new Set();
+            const arr = JSON.parse(raw);
+            if (!Array.isArray(arr)) return new Set();
+            return new Set(arr);
+        } catch (e) {
+            return new Set();
+        }
+    }
+
+    function saveCheckedSet(set) {
+        try {
+            localStorage.setItem(checkedKey, JSON.stringify(Array.from(set)));
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    let checkedSet = loadCheckedSet();
+
+    function applyCheckedUI() {
+        const items = document.querySelectorAll('#ingredientsPanel li[data-ingid]');
+        items.forEach(li => {
+            const id = li.dataset.ingid;
+            if (checkedSet.has(id)) {
+                li.classList.add('ing-checked');
+            } else {
+                li.classList.remove('ing-checked');
+            }
+        });
+    }
+
+    const ingredientsPanel = document.getElementById('ingredientsPanel');
+    if (ingredientsPanel) {
+        ingredientsPanel.addEventListener('click', function(e) {
+            const li = e.target.closest('li[data-ingid]');
+            if (!li) return;
+
+            // Don't toggle if user clicked the close button or inside form controls
+            if (e.target.closest('button') && !li.contains(e.target.closest('button'))) return;
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'LABEL') return;
+
+            const id = li.dataset.ingid;
+            if (checkedSet.has(id)) {
+                checkedSet.delete(id);
+            } else {
+                checkedSet.add(id);
+            }
+            saveCheckedSet(checkedSet);
+            applyCheckedUI();
+        });
+    }
+
+    const clearBtn = document.getElementById('clearIngredients');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', function() {
+            checkedSet = new Set();
+            saveCheckedSet(checkedSet);
+            applyCheckedUI();
+        });
+    }
+
+    function updateView() {
+        // Hide all
+        stepCards.forEach(card => card.classList.remove('active'));
+        
+        // Show current
+        stepCards[currentStep].classList.add('active');
+
+        // Persist step
+        try {
+            localStorage.setItem(storageKey, String(currentStep));
+        } catch (e) {
+            // ignore
+        }
+        
+        // Update buttons
+        document.getElementById('prevBtn').disabled = currentStep === 0;
+        document.getElementById('nextBtn').disabled = currentStep === totalSteps;
+        
+        // Update progress bar
+        const progress = (currentStep / totalSteps) * 100;
+        document.getElementById('progressBar').style.width = `${progress}%`;
+
+        // Parse timers in the current step text
+        parseTimers(stepCards[currentStep]);
+    }
+
+    function nextStep() {
+        if (currentStep < totalSteps) {
+            currentStep++;
+            updateView();
+        }
+    }
+
+    function prevStep() {
+        if (currentStep > 0) {
+            currentStep--;
+            updateView();
+        }
+    }
+
+    function toggleIngredients() {
+        document.getElementById('ingredientsPanel').classList.toggle('open');
+    }
+
+    function restartCook() {
+        const hasTimers = (typeof activeTimers !== 'undefined') && activeTimers.size > 0;
+        const hasChecked = (typeof checkedSet !== 'undefined') && checkedSet.size > 0;
+        if (hasTimers || hasChecked) {
+            const ok = window.confirm('Starta om och rensa timers/ingredienser?');
+            if (!ok) return;
+
+            // Clear timers
+            try {
+                Array.from(activeTimers.keys()).forEach(id => cancelTimer(id));
+                if (timerTick) {
+                    clearInterval(timerTick);
+                    timerTick = null;
+                }
+                renderTimerBar();
+            } catch (e) {
+                // ignore
+            }
+
+            // Clear ingredient checklist
+            try {
+                checkedSet = new Set();
+                try { localStorage.removeItem(checkedKey); } catch (e) {}
+                applyCheckedUI();
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        currentStep = 0;
+        try { localStorage.removeItem(storageKey); } catch (e) {}
+        updateView();
+    }
+
+    // Keyboard navigation
+    // Avoid spacebar double-advance (keydown handler + focused button click)
+    const nextBtnEl = document.getElementById('nextBtn');
+    const prevBtnEl = document.getElementById('prevBtn');
+    if (nextBtnEl) nextBtnEl.addEventListener('click', () => nextBtnEl.blur());
+    if (prevBtnEl) prevBtnEl.addEventListener('click', () => prevBtnEl.blur());
+
+    document.addEventListener('keydown', function(event) {
+        if (event.repeat) return;
+
+        // If alarm is active, Space/Enter acknowledges it (don't navigate)
+        if (window.__cookAlarmActive) {
+            if (event.code === 'Space' || event.key === ' ' || event.key === 'Enter') {
+                event.preventDefault();
+                acknowledgeAlarm();
+            }
+            return;
+        }
+
+        // Debounce to avoid double-advance from key events + default button activation
+        const now = Date.now();
+        if (!window.__cookKeyNavAt) window.__cookKeyNavAt = 0;
+        if (now - window.__cookKeyNavAt < 250) return;
+
+        const active = document.activeElement;
+        const tag = active && active.tagName ? active.tagName.toUpperCase() : '';
+        if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(tag)) return;
+
+        if (event.key === 'ArrowRight') {
+            event.preventDefault();
+            window.__cookKeyNavAt = now;
+            nextStep();
+        } else if (event.key === 'ArrowLeft') {
+            event.preventDefault();
+            window.__cookKeyNavAt = now;
+            prevStep();
+        } else if (event.code === 'Space' || event.key === ' ') {
+            event.preventDefault();
+            window.__cookKeyNavAt = now;
+            nextStep();
+        }
+    });
+
+    // Swipe navigation (mobile)
+    (function attachSwipe() {
+        const container = document.querySelector('.cook-container');
+        if (!container) return;
+
+        let startX = null;
+        let startY = null;
+
+        container.addEventListener('touchstart', function(e) {
+            if (!e.touches || e.touches.length !== 1) return;
+            const t = e.touches[0];
+            startX = t.clientX;
+            startY = t.clientY;
+        }, { passive: true });
+
+        container.addEventListener('touchend', function(e) {
+            if (startX === null || startY === null) return;
+            const t = (e.changedTouches && e.changedTouches[0]) ? e.changedTouches[0] : null;
+            if (!t) return;
+
+            // Ignore swipe when ingredients panel is open
+            const panel = document.getElementById('ingredientsPanel');
+            if (panel && panel.classList.contains('open')) {
+                startX = null;
+                startY = null;
+                return;
+            }
+
+            const dx = t.clientX - startX;
+            const dy = t.clientY - startY;
+            startX = null;
+            startY = null;
+
+            // Only horizontal swipes
+            if (Math.abs(dx) < 60) return;
+            if (Math.abs(dy) > 80) return;
+
+            if (dx < 0) {
+                nextStep();
+            } else {
+                prevStep();
+            }
+        }, { passive: true });
+    })();
+
+    // Wake Lock API
+    async function requestWakeLock() {
+        try {
+            if ('wakeLock' in navigator) {
+                const wakeLock = await navigator.wakeLock.request('screen');
+                console.log('Wake Lock is active!');
+            }
+        } catch (err) {
+            console.log(`${err.name}, ${err.message}`);
+        }
+    }
+    requestWakeLock();
+
+    // Simple Timer Parser
+    function parseTimers(element) {
+        // Avoid re-parsing
+        if (element.dataset.parsed) return;
+        
+        const textDiv = element.querySelector('.step-text');
+        if (!textDiv) return;
+
+        // Regex for "X min", "X minuter", "X h", "X timmar"
+        const timeRegex = /(\d+)\s*(min|minuter|m|h|timmar|timme)/gi;
+        const text = (textDiv.textContent || '').toString();
+        const matches = Array.from(text.matchAll(timeRegex));
+
+        if (matches.length > 0) {
+            let timersContainer = element.querySelector('.step-timers');
+            if (!timersContainer) {
+                timersContainer = document.createElement('div');
+                timersContainer.className = 'step-timers';
+                textDiv.insertAdjacentElement('afterend', timersContainer);
+            }
+
+            matches.forEach((m, idx) => {
+                const number = m[1];
+                const unit = (m[2] || '').toLowerCase();
+                let seconds = 0;
+                if (unit.startsWith('m')) {
+                    seconds = parseInt(number, 10) * 60;
+                } else if (unit.startsWith('h') || unit.startsWith('t')) {
+                    seconds = parseInt(number, 10) * 3600;
+                }
+                if (!seconds || seconds <= 0) return;
+
+                const minutes = Math.max(0, Math.round(seconds / 60));
+                const displayText = formatMmSs(seconds);
+
+                const card = document.createElement('div');
+                card.className = 'card mb-3';
+                card.innerHTML = `
+                    <div class="card-body p-3">
+                        <div class="fw-semibold mb-2">Timer</div>
+                        <div class="d-flex align-items-end gap-2 flex-wrap">
+                            <div>
+                                <label class="form-label mb-1 small text-muted">Tid (min)</label>
+                                <input type="number" class="form-control form-control-sm timer-minutes" min="0" step="0.1" value="${minutes}">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1 small text-muted">Tid</label>
+                                <div class="form-control form-control-sm" style="width: 120px;">
+                                    <span class="timer-display" aria-live="polite">${displayText}</span>
+                                </div>
+                            </div>
+                            <div>
+                                <button type="button" class="btn btn-primary btn-sm timer-start">Starta timer</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                const minutesInput = card.querySelector('.timer-minutes');
+                const displayEl = card.querySelector('.timer-display');
+                const startBtn = card.querySelector('.timer-start');
+
+                if (minutesInput && displayEl) {
+                    minutesInput.addEventListener('input', () => {
+                        const v = parseFloat(minutesInput.value);
+                        const s = isNaN(v) ? 0 : Math.max(0, Math.round(v * 60));
+                        displayEl.innerText = s > 0 ? formatMmSs(s) : '0:00';
+                        try { delete displayEl.dataset.timerId; } catch (e) {}
+                    });
+                }
+
+                if (startBtn && minutesInput && displayEl) {
+                    startBtn.addEventListener('click', () => {
+                        const v = parseFloat(minutesInput.value);
+                        const s = isNaN(v) ? 0 : Math.max(0, Math.round(v * 60));
+                        startTimer(displayEl, s);
+                        try { startBtn.blur(); } catch (e) {}
+                        try { focusCookContainer(); } catch (e) {}
+                    });
+                }
+
+                timersContainer.appendChild(card);
+            });
+        }
+
+        element.dataset.parsed = "true";
+    }
+
+    // Active Timers (persist across steps)
+    const activeTimers = new Map();
+    let timerTick = null;
+
+    window.__cookTimerAlarmCount = window.__cookTimerAlarmCount || 0;
+    window.__cookTimerAlarmBeepCount = window.__cookTimerAlarmBeepCount || 0;
+    window.__cookAlarmActive = window.__cookAlarmActive || false;
+
+    const alarmOverlay = document.getElementById('alarmOverlay');
+    const alarmAckBtn = document.getElementById('alarmAckBtn');
+    const alarmText = document.getElementById('alarmText');
+    const pendingAlarmIds = new Set();
+    let alarmLoop = null;
+    let alarmVibeLoop = null;
+
+    function focusCookContainer() {
+        const container = document.querySelector('.cook-container');
+        if (!container) return;
+        if (typeof container.focus === 'function') container.focus();
+    }
+
+    function ensureAudioContext() {
+        try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) return null;
+            const ctx = window.__cookAudioCtx || (window.__cookAudioCtx = new AudioCtx());
+            if (ctx && typeof ctx.resume === 'function') {
+                // Resume usually requires user gesture; startTimer() is called from a click.
+                ctx.resume().catch(() => {});
+            }
+            return ctx;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function beepOnce() {
+        try {
+            window.__cookTimerAlarmBeepCount += 1;
+        } catch (e) {}
+
+        try {
+            const ctx = ensureAudioContext();
+            if (!ctx) return;
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+
+            osc.type = 'sine';
+            osc.frequency.value = 880;
+            gain.gain.value = 0.001;
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+
+            const now = ctx.currentTime;
+            gain.gain.setValueAtTime(0.001, now);
+            gain.gain.exponentialRampToValueAtTime(0.25, now + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+            osc.start(now);
+            osc.stop(now + 0.25);
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    function showAlarmOverlay() {
+        if (!alarmOverlay) return;
+        const count = pendingAlarmIds.size;
+        if (alarmText) {
+            alarmText.innerText = count > 1
+                ? `Du har ${count} timers som är klara. Tryck mellanslag/Enter eller tryck på knappen för att bekräfta.`
+                : 'Tryck mellanslag/Enter eller tryck på knappen för att bekräfta.';
+        }
+        alarmOverlay.classList.add('show');
+        window.__cookAlarmActive = true;
+    }
+
+    function hideAlarmOverlay() {
+        if (!alarmOverlay) return;
+        alarmOverlay.classList.remove('show');
+        window.__cookAlarmActive = false;
+    }
+
+    function startAlarmLoop() {
+        showAlarmOverlay();
+        if (!alarmLoop) {
+            alarmLoop = setInterval(() => {
+                if (pendingAlarmIds.size === 0) return;
+                beepOnce();
+            }, 1100);
+        }
+        if (!alarmVibeLoop) {
+            alarmVibeLoop = setInterval(() => {
+                if (pendingAlarmIds.size === 0) return;
+                try {
+                    if (navigator.vibrate) navigator.vibrate([200, 120, 200]);
+                } catch (e) {}
+            }, 2500);
+        }
+    }
+
+    function stopAlarmLoop() {
+        if (alarmLoop) {
+            clearInterval(alarmLoop);
+            alarmLoop = null;
+        }
+        if (alarmVibeLoop) {
+            clearInterval(alarmVibeLoop);
+            alarmVibeLoop = null;
+        }
+        hideAlarmOverlay();
+    }
+
+    function acknowledgeAlarm() {
+        // Mark all pending done timers as acknowledged
+        for (const id of pendingAlarmIds) {
+            const t = activeTimers.get(id);
+            if (t) t.acked = true;
+        }
+        pendingAlarmIds.clear();
+        stopAlarmLoop();
+        renderTimerBar();
+
+        // Ensure keyboard focus returns to the cook surface so Space navigates steps
+        try {
+            const a = document.activeElement;
+            if (a && typeof a.blur === 'function') a.blur();
+        } catch (e) {}
+        try {
+            focusCookContainer();
+        } catch (e) {}
+    }
+
+    if (alarmAckBtn) {
+        alarmAckBtn.addEventListener('click', () => acknowledgeAlarm());
+    }
+    if (alarmOverlay) {
+        alarmOverlay.addEventListener('click', (e) => {
+            // Clicking outside button also acknowledges
+            if (e.target === alarmOverlay) acknowledgeAlarm();
+        });
+    }
+
+    function fireTimerAlarm(timer) {
+        try {
+            window.__cookTimerAlarmCount += 1;
+        } catch (e) {}
+
+        try {
+            window.dispatchEvent(new CustomEvent('cook:timerDone', { detail: { id: timer.id, stepIndex: timer.stepIndex } }));
+        } catch (e) {}
+
+        // Add to pending alarms and start looping sound/vibration until acknowledged
+        try {
+            pendingAlarmIds.add(timer.id);
+        } catch (e) {}
+        startAlarmLoop();
+    }
+
+    function formatMmSs(totalSeconds) {
+        const m = Math.floor(totalSeconds / 60);
+        const s = totalSeconds % 60;
+        return `${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
+    function ensureTimerTick() {
+        if (timerTick) return;
+        timerTick = setInterval(() => {
+            const now = Date.now();
+            for (const [id, t] of activeTimers.entries()) {
+                const remaining = Math.max(0, Math.ceil((t.endAt - now) / 1000));
+                if (t.element && t.element.isConnected) {
+                    t.element.innerText = remaining > 0 ? formatMmSs(remaining) : 'KLART!';
+                }
+                t.remaining = remaining;
+                if (remaining <= 0 && !t.doneAt) {
+                    t.doneAt = now;
+                    if (t.element && t.element.isConnected) {
+                        t.element.classList.remove('timer-active');
+                    }
+                    if (!t.alarmed) {
+                        t.alarmed = true;
+                        fireTimerAlarm(t);
+                    }
+                }
+                // Auto-remove 10s after done
+                if (t.doneAt && t.acked && now - t.doneAt > 10000) {
+                    if (t.element && t.element.isConnected) {
+                        t.element.innerText = t.originalText;
+                    }
+                    activeTimers.delete(id);
+                }
+            }
+            renderTimerBar();
+            if (activeTimers.size === 0) {
+                clearInterval(timerTick);
+                timerTick = null;
+            }
+        }, 1000);
+    }
+
+    function renderTimerBar() {
+        const bar = document.getElementById('timerBar');
+        if (!bar) return;
+
+        if (activeTimers.size === 0) {
+            bar.classList.remove('show');
+            bar.innerHTML = '';
+            return;
+        }
+
+        bar.classList.add('show');
+        const timers = Array.from(activeTimers.values())
+            .sort((a, b) => (a.doneAt ? 1 : 0) - (b.doneAt ? 1 : 0));
+
+        bar.innerHTML = timers.map(t => {
+            const label = t.doneAt ? 'KLART' : formatMmSs(t.remaining);
+            const stepLabel = t.stepIndex !== null ? `Steg ${t.stepIndex}` : '';
+            const title = t.originalText.replace(/"/g, '&quot;');
+            return `
+                <span class="timer-chip" title="${title}">
+                    <span>${label}</span>
+                    ${stepLabel ? `<small>${stepLabel}</small>` : ''}
+                    <button type="button" aria-label="Ta bort timer" onclick="cancelTimer('${t.id}')">×</button>
+                </span>
+            `;
+        }).join('');
+    }
+
+    function cancelTimer(id) {
+        const t = activeTimers.get(id);
+        if (!t) return;
+        if (t.element && t.element.isConnected) {
+            t.element.innerText = t.originalText;
+            t.element.classList.remove('timer-active');
+        }
+        try { pendingAlarmIds.delete(id); } catch (e) {}
+        activeTimers.delete(id);
+        if (pendingAlarmIds.size === 0) {
+            stopAlarmLoop();
+        }
+        renderTimerBar();
+    }
+
+    function startTimer(element, seconds) {
+        if (!element || seconds <= 0) return;
+
+        // Prime audio context while we still have a user gesture
+        ensureAudioContext();
+
+        // Prevent duplicate start from same element
+        if (element.dataset.timerId && activeTimers.has(element.dataset.timerId)) return;
+
+        const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        element.dataset.timerId = id;
+        element.classList.add('timer-active');
+
+        const originalText = element.innerText;
+        const stepIndex = currentStep === 0 || currentStep === totalSteps ? null : currentStep;
+
+        activeTimers.set(id, {
+            id,
+            endAt: Date.now() + seconds * 1000,
+            remaining: seconds,
+            originalText,
+            element,
+            stepIndex,
+            doneAt: null,
+            alarmed: false,
+            acked: false,
+        });
+
+        ensureTimerTick();
+        renderTimerBar();
+    }
+
+    // Initial view
+    updateView();
+    restoreCookServings();
+    applyCheckedUI();
+    try { focusCookContainer(); } catch (e) {}
+</script>
+{% endblock %}

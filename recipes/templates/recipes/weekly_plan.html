@@ -1,0 +1,104 @@
+{% extends 'recipes/base.html' %}
+{% load recipes_extras %}
+
+{% block content %}
+<div class="row mt-4">
+    <div class="col-12">
+        <h2>Veckomeny</h2>
+        
+        <div class="card mb-4">
+            <div class="card-header">Generera meny</div>
+            <div class="card-body">
+                <form method="post" action="{% url 'generate_random_menu' %}">
+                    {% csrf_token %}
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label for="{{ form.max_cooking_time.id_for_label }}" class="form-label">{{ form.max_cooking_time.label }}</label>
+                            {{ form.max_cooking_time }}
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">{{ form.include_types.label }}</label>
+                            <div class="d-flex flex-wrap gap-2">
+                                {% for checkbox in form.include_types %}
+                                    <div class="form-check">
+                                        {{ checkbox.tag }}
+                                        <label class="form-check-label" for="{{ checkbox.id_for_label }}">{{ checkbox.choice_label }}</label>
+                                    </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">{{ form.exclude_types.label }}</label>
+                            <div class="d-flex flex-wrap gap-2">
+                                {% for checkbox in form.exclude_types %}
+                                    <div class="form-check">
+                                        {{ checkbox.tag }}
+                                        <label class="form-check-label" for="{{ checkbox.id_for_label }}">{{ checkbox.choice_label }}</label>
+                                    </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-info text-white">Slumpa meny (7 dagar)</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="mb-3 text-end">
+            <form method="post" action="{% url 'save_weekly_menu' %}" class="d-inline">
+                {% csrf_token %}
+                <div class="input-group" style="max-width: 520px; float: right;">
+                    <input type="text" name="menu_name" class="form-control" placeholder="Namn på veckomeny (valfritt)">
+                    <button type="submit" class="btn btn-success">Spara veckomeny</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="mb-3 text-end">
+            <form method="post" action="{% url 'clear_menu' %}" class="d-inline">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-warning">Rensa meny</button>
+            </form>
+        </div>
+        
+        <div class="row">
+            {% for day_code, day_name in days %}
+                <div class="col-md-4 mb-3">
+                    <div class="card h-100">
+                        <div class="card-header bg-primary text-white">
+                            {{ day_name }}
+                        </div>
+                        <div class="card-body">
+                            {% with plan_item=weekly_plan|get_item:day_code %}
+                                {% if plan_item %}
+                                    <h5>{{ plan_item.recipe.title }}</h5>
+                                    <p class="small">{{ plan_item.recipe.get_dish_type_display }}</p>
+                                    <a href="{% url 'recipe_detail' plan_item.recipe.pk %}" class="btn btn-sm btn-outline-primary">Visa</a>
+                                    <form method="post" action="{% url 'remove_from_menu' plan_item.pk %}" class="d-inline">
+                                        {% csrf_token %}
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">X</button>
+                                    </form>
+                                {% else %}
+                                    <p class="text-muted">Inget planerat</p>
+                                {% endif %}
+                                
+                                <hr>
+                                <form method="post" action="{% url 'update_menu_day' %}">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="day" value="{{ day_code }}">
+                                    <select name="recipe_id" class="form-select form-select-sm" onchange="this.form.submit()">
+                                        <option value="">Välj recept...</option>
+                                        {% for recipe in all_recipes %}
+                                            <option value="{{ recipe.pk }}">{{ recipe.title }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </form>
+                            {% endwith %}
+                        </div>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}
