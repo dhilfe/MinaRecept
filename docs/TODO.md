@@ -78,6 +78,11 @@
     - [ ] Förbereda API-endpoints (Django REST Framework?)
     - [ ] Token-baserad autentisering för API
 
+- [ ] **Android-spår (senare): förutsättningar för Android-app**
+    - [ ] Spegla iOS-spårets backend-förutsättningar (API-kontrakt + auth)
+    - [ ] Verifiera push-notiser/alarmljud-strategi för Android (framtida)
+    - [ ] Dokumentera bygg/deploy-flöde för Android (framtida)
+
 - [ ] **Social Inloggning**
     - [ ] Google Sign-In
     - [ ] Apple Sign-In
