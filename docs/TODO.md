@@ -38,7 +38,13 @@
 ## Fas 1.5: Förbättringar & Robusthet (Pågående)
 
 - [ ] **Git / Remote**
-    - [ ] Lägg till remote (GitHub/GitLab) och pusha till `main`
+    - [ ] Skapa repo på GitHub/GitLab
+    - [ ] Lägg till `origin` remote
+    - [ ] Pusha `main` till `origin`
+    - [ ] Pusha `stage` till `origin` (första gången)
+    - [ ] Slå på Branch protection för `stage`
+    - [ ] Kräv GitHub Actions-status (CI) för merge till `stage`
+    - [ ] (Valfritt) Blockera direkt-push till `stage` och kräv PR
 
 - [ ] **Robust Recept-import från URL**
     - [x] Hämta HTML från URL
