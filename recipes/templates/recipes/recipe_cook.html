@@ -246,14 +246,16 @@
         </div>
 
         <!-- Steps -->
-        {% for line in recipe.steps.splitlines %}
-            {% if line|length > 0 %}
-            <div class="step-card" id="step-{{ forloop.counter }}">
-                <div class="step-number">Steg {{ forloop.counter }}</div>
-                <div class="step-text">{{ line }}</div>
-            </div>
-            {% endif %}
-        {% endfor %}
+        {% with ingredient_names=recipe.ingredients|ingredient_names %}
+            {% for line in recipe.steps.splitlines %}
+                {% if line|length > 0 %}
+                <div class="step-card" id="step-{{ forloop.counter }}">
+                    <div class="step-number">Steg {{ forloop.counter }}</div>
+                    <div class="step-text">{{ line|underline_ingredients:ingredient_names }}</div>
+                </div>
+                {% endif %}
+            {% endfor %}
+        {% endwith %}
 
         <!-- Finish Card -->
         <div class="step-card text-center" id="step-finish" style="text-align:center;">

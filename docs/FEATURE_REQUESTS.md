@@ -52,3 +52,16 @@ Det här dokumentet används för att spåra feature requests när vi jobbar i b
 - **Branch:** feature/fr-20251224-03-ios-app-foundation
 - **Leverans:** docs/API.md + /api-endpoints + API-tester
 - **Status:** ready-for-merge
+
+---
+
+## FR-20251224-04 – Understryk ingredienser i instruktioner
+- **Beskrivning:** I receptdetaljen ("Gör så här") och i Cook Mode ska ord/fraser som matchar ingredienslistan understrykas för att bli tydligare under matlagning.
+- **Acceptanskriterier:**
+  - Ingrediensnamn understrukna i receptdetaljens instruktioner.
+  - Ingrediensnamn understrukna i Cook Mode steg-text.
+  - Matchning är case-insensitiv och matchar även böjningar/plural (t.ex. "tomat" → "tomaterna").
+  - Tester uppdaterade (minst E2E) som verifierar understrykning.
+- **Påverkar:** templates, templatetags, tests
+- **Branch:** feature/fr-20251224-04-underline-ingredients
+- **Status:** in-progress

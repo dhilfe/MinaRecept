@@ -80,9 +80,12 @@
                     <div class="col-md-8">
                         <h4>Gör så här</h4>
                         <ol class="list-group list-group-numbered">
-                            {% for line in recipe.steps.splitlines %}
-                                <li class="list-group-item">{{ line }}</li>
-                            {% endfor %}
+                            {% load recipes_extras %}
+                            {% with ingredient_names=recipe.ingredients|ingredient_names %}
+                                {% for line in recipe.steps.splitlines %}
+                                    <li class="list-group-item">{{ line|underline_ingredients:ingredient_names }}</li>
+                                {% endfor %}
+                            {% endwith %}
                         </ol>
                     </div>
                 </div>

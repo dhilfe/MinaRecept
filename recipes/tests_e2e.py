@@ -25,8 +25,8 @@ class E2ERecipeFlowTests(LiveServerTestCase):
         self.recipe = Recipe.objects.create(
             user=self.user,
             title="E2E Recipe",
-            ingredients='[{"amount":"1","unit":"st","name":"Tomat"}]',
-            steps="Vänta 1 min\nSen gör du B",
+            ingredients='[{"amount":"1","unit":"st","name":"Tomat"},{"amount":"1","unit":"st","name":"Röd lök"}]',
+            steps="Blanda i tomaterna i 1 min\nFräs rödlöken\nSen gör du B",
             cooking_time=10,
             servings=2,
             difficulty="easy",
@@ -60,6 +60,10 @@ class E2ERecipeFlowTests(LiveServerTestCase):
                 # Go to recipe detail
                 detail_url = self.live_server_url + reverse("recipe_detail", args=[self.recipe.pk])
                 page.goto(detail_url)
+
+                # Ensure ingredient mention is underlined in "Gör så här"
+                page.wait_for_selector('ol.list-group .text-decoration-underline')
+                assert "tomat" in page.inner_text('ol.list-group').lower()
 
                 # Add to shopping list (chooser page)
                 page.click('a:has-text("Lägg till i inköpslista")')
@@ -102,6 +106,11 @@ class E2ERecipeFlowTests(LiveServerTestCase):
 
                 assert active_id == "step-1", f"Expected step-1 after one Space, got {active_id} ({step_label})"
 
+                # Ingredient mention should be underlined in Cook Mode step text
+                step1_html = page.inner_html(".step-card.active .step-text")
+                assert "text-decoration-underline" in step1_html, step1_html
+                assert "tomat" in page.inner_text(".step-card.active .step-text").lower()
+
                 # Start a timer from the step text (so restart needs confirmation)
                 page.evaluate("() => { window.__cookTimerAlarmCount = 0; }")
                 page.evaluate("() => { window.__cookTimerAlarmBeepCount = 0; window.__cookAlarmActive = false; }")
@@ -127,6 +136,11 @@ class E2ERecipeFlowTests(LiveServerTestCase):
                 # Next Space should navigate to next step (not start timer again)
                 page.keyboard.press("Space")
                 page.wait_for_selector("#step-2.step-card.active")
+
+                # Multi-word ingredient should be underlined even when written as a compound/definite form
+                step2_html = page.inner_html(".step-card.active .step-text")
+                assert "text-decoration-underline" in step2_html, step2_html
+                assert "lök" in page.inner_text(".step-card.active .step-text").lower()
 
                 # Check an ingredient
                 page.click("button:has-text(\"Ingredienser\")")
@@ -163,5 +177,7 @@ class E2ERecipeFlowTests(LiveServerTestCase):
                 page.wait_for_function("() => !document.getElementById('timerBar').classList.contains('show')")
                 assert page.locator("#ingredientsPanel li.ing-checked").count() == 0
             finally:
-                context.close()
-                browser.close()
+                with contextlib.suppress(Exception):
+                    context.close()
+                with contextlib.suppress(Exception):
+                    browser.close()
