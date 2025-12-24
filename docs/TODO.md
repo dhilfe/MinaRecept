@@ -37,6 +37,9 @@
 
 ## Fas 1.5: Förbättringar & Robusthet (Pågående)
 
+- [ ] **Git / Remote**
+    - [ ] Lägg till remote (GitHub/GitLab) och pusha till `main`
+
 - [ ] **Robust Recept-import från URL**
     - [x] Hämta HTML från URL
     - [x] Extrahera data via JSON-LD (strukturerad data)
