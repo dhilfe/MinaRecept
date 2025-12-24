@@ -121,6 +121,11 @@
     - [x] Detektera tidsangivelser i texten (t.ex. "koka i 10 min")
     - [x] Gör dem klickbara för att starta en nedräkning direkt i vyn
 
+- [ ] **FR-20251224-04: Understryk ingredienser i instruktioner**
+    - [ ] Understryk ingrediensnamn i "Gör så här" (receptdetalj)
+    - [ ] Understryk ingrediensnamn i Cook Mode steg-text
+    - [ ] Lägg test som verifierar understrykning
+
 - [ ] **Minimalistisk Design**
     - [x] Rensa upp receptvyn: Fokus på Bild, Ingredienser, Steg
     - [x] Dölj metadata (datum, kategorier) tills man klickar "Visa mer"

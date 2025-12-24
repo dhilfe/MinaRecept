@@ -26,7 +26,7 @@ class E2ERecipeFlowTests(LiveServerTestCase):
             user=self.user,
             title="E2E Recipe",
             ingredients='[{"amount":"1","unit":"st","name":"Tomat"}]',
-            steps="Vänta 1 min\nSen gör du B",
+            steps="Blanda i tomaterna i 1 min\nSen gör du B",
             cooking_time=10,
             servings=2,
             difficulty="easy",
@@ -60,6 +60,10 @@ class E2ERecipeFlowTests(LiveServerTestCase):
                 # Go to recipe detail
                 detail_url = self.live_server_url + reverse("recipe_detail", args=[self.recipe.pk])
                 page.goto(detail_url)
+
+                # Ensure ingredient mention is underlined in "Gör så här"
+                page.wait_for_selector('ol.list-group .text-decoration-underline')
+                assert "tomat" in page.inner_text('ol.list-group').lower()
 
                 # Add to shopping list (chooser page)
                 page.click('a:has-text("Lägg till i inköpslista")')
@@ -101,6 +105,10 @@ class E2ERecipeFlowTests(LiveServerTestCase):
                     step_label = page.inner_text(".step-card.active .step-number")
 
                 assert active_id == "step-1", f"Expected step-1 after one Space, got {active_id} ({step_label})"
+
+                # Ingredient mention should be underlined in Cook Mode step text
+                page.wait_for_selector(".step-card.active .step-text .text-decoration-underline")
+                assert "tomat" in page.inner_text(".step-card.active .step-text").lower()
 
                 # Start a timer from the step text (so restart needs confirmation)
                 page.evaluate("() => { window.__cookTimerAlarmCount = 0; }")
