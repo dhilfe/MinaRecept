@@ -34,3 +34,21 @@ Det här dokumentet används för att spåra feature requests när vi jobbar i b
 - **Påverkar:** CI, git-workflow
 - **Branch:** feature/fr-20251224-02-stage-ci-gate
 - **Status:** in-progress
+
+---
+
+## FR-20251224-03 – iOS-spår: förutsättningar för iOS-app
+- **Beskrivning:** Skapa förutsättningar för att kunna bygga en iOS-app som använder ReceptApp (iOS-spåret). Fokus är grundarkitektur/kontrakt, inte full app-funktionalitet.
+- **Målbild:** En iOS-klient kan autentisera, hämta data och använda Cook Mode/inköpslistor via en stabil backend.
+- **Acceptanskriterier (iOS-spår):**
+  - API-kontrakt definierat (minsta endpoints för recept, veckomeny, inköpslistor, cook/timers).
+  - Autentisering för app-klient definierad (t.ex. token-baserad auth för API).
+  - CORS/CSRF-strategi beskriven för mobilapp.
+  - Mediehantering för bilder (upload + serving) tydliggjord.
+  - CI-plan för mobil (framtida) dokumenterad.
+- **Avgränsningar:**
+  - Ingen native iOS-kod i denna FR (endast backend-förutsättningar + dokumentation).
+- **Påverkar:** API, auth, docs
+- **Branch:** feature/fr-20251224-03-ios-app-foundation
+- **Leverans:** docs/API.md + /api-endpoints + API-tester
+- **Status:** ready-for-merge

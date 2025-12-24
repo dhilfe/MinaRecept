@@ -5,6 +5,8 @@ from .models import Recipe, WeeklyPlan, WeeklyMenu, ShoppingList, ShoppingListIt
 from unittest.mock import patch, MagicMock
 import requests
 from datetime import date, timedelta
+from rest_framework.authtoken.models import Token
+from rest_framework.test import APIClient
 
 class RecipeTests(TestCase):
     def setUp(self):
@@ -331,3 +333,85 @@ class RecipeTests(TestCase):
         self.assertIn('Here is the recipe description.', data['description'])
         # Image URL should be passed through for optional download/save
         self.assertEqual(data.get('imported_image_url'), 'http://example.com/image.jpg')
+
+
+class ApiTests(TestCase):
+    def setUp(self):
+        self.user1 = User.objects.create_user(username='apiuser1', password='password1')
+        self.user2 = User.objects.create_user(username='apiuser2', password='password2')
+
+        self.recipe1 = Recipe.objects.create(
+            user=self.user1,
+            title='User1 Recipe',
+            ingredients='[]',
+            steps='x',
+            cooking_time=10,
+            servings=2,
+        )
+        self.recipe2 = Recipe.objects.create(
+            user=self.user2,
+            title='User2 Recipe',
+            ingredients='[]',
+            steps='y',
+            cooking_time=12,
+            servings=3,
+        )
+
+        self.client_api = APIClient()
+
+    def test_api_token_obtain(self):
+        response = self.client_api.post(
+            '/api/auth/token/',
+            {'username': 'apiuser1', 'password': 'password1'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('token', response.data)
+
+    def test_api_requires_auth(self):
+        response = self.client_api.get('/api/recipes/')
+        self.assertIn(response.status_code, [401, 403])
+
+        token, _ = Token.objects.get_or_create(user=self.user1)
+        self.client_api.credentials(HTTP_AUTHORIZATION=f'Token {token.key}')
+        authed = self.client_api.get('/api/recipes/')
+        self.assertEqual(authed.status_code, 200)
+
+    def test_api_recipes_scoped_to_user(self):
+        token, _ = Token.objects.get_or_create(user=self.user1)
+        self.client_api.credentials(HTTP_AUTHORIZATION=f'Token {token.key}')
+
+        response = self.client_api.get('/api/recipes/')
+        self.assertEqual(response.status_code, 200)
+        titles = [r['title'] for r in response.data]
+        self.assertIn('User1 Recipe', titles)
+        self.assertNotIn('User2 Recipe', titles)
+
+    def test_cannot_create_weekly_plan_with_other_users_recipe(self):
+        token, _ = Token.objects.get_or_create(user=self.user1)
+        self.client_api.credentials(HTTP_AUTHORIZATION=f'Token {token.key}')
+
+        response = self.client_api.post(
+            '/api/weekly-plan/',
+            {'day': 'mon', 'recipe': self.recipe2.id},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_cannot_create_shopping_item_on_other_users_list(self):
+        other_list = ShoppingList.objects.create(user=self.user2, name='Other list')
+
+        token, _ = Token.objects.get_or_create(user=self.user1)
+        self.client_api.credentials(HTTP_AUTHORIZATION=f'Token {token.key}')
+
+        response = self.client_api.post(
+            '/api/shopping-list-items/',
+            {
+                'shopping_list': other_list.id,
+                'name': 'Tomat',
+                'amount': '1',
+                'unit': 'st',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
