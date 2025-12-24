@@ -25,6 +25,23 @@ def _normalize_for_match(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip())
 
 
+def _clean_ingredient_name(value: str) -> str:
+    s = _normalize_for_match(value)
+    if not s:
+        return ""
+    # Drop parenthetical notes and trailing punctuation.
+    s = re.sub(r"\([^)]*\)", "", s)
+    # Keep the part before commas/semicolons (common for "salt, efter smak").
+    s = re.split(r"[,;]", s, maxsplit=1)[0]
+    s = s.strip(" .,:;\t\n\r")
+    return _normalize_for_match(s)
+
+
+def _letter_tokens(value: str) -> list[str]:
+    # Unicode letters only (no digits/underscore). Works well for Swedish.
+    return re.findall(r"[^\W\d_]+", value, flags=re.UNICODE)
+
+
 @register.filter
 def ingredient_names(value):
     """Return a list of ingredient names from either JSON or legacy text."""
@@ -34,7 +51,7 @@ def ingredient_names(value):
     if isinstance(parsed, list):
         for item in parsed:
             if isinstance(item, dict):
-                name = _normalize_for_match(str(item.get("name", "")))
+                name = _clean_ingredient_name(str(item.get("name", "")))
                 if name:
                     names.append(name)
     else:
@@ -51,7 +68,7 @@ def ingredient_names(value):
                 r"^\s*\d+(?:[\.,]\d+)?(?:\s+\d+/\d+|\s*\d+/\d+)?\s*", "", line, flags=re.IGNORECASE
             )
             line = re.sub(r"^(?:st|dl|cl|l|ml|g|kg|msk|tsk|krm)\b\s*", "", line, flags=re.IGNORECASE)
-            line = _normalize_for_match(line)
+            line = _clean_ingredient_name(line)
             if line:
                 names.append(line)
 
@@ -86,23 +103,31 @@ def underline_ingredients(text: str, names):
     if not name_list:
         return escape(text)
 
-    # Match longer names first to avoid partial matches (e.g. "röd lök" before "lök").
+    # Match longer names first to avoid partial matches.
     name_list.sort(key=lambda s: len(s), reverse=True)
 
+    # Allow plural/definite suffix in Swedish etc (unicode letters) + hyphen.
+    suffix = r"(?:[^\W\d_]|-)*"
+
     parts: list[str] = []
-    for name in name_list:
-        n = _normalize_for_match(name)
+    for raw_name in name_list:
+        n = _clean_ingredient_name(raw_name)
         if not n or len(n) < 3:
             continue
-        # Convert spaces to flexible whitespace; allow suffix letters/hyphens.
-        escaped_name = re.escape(n)
-        escaped_name = escaped_name.replace(r"\ ", r"\\s+")
-        parts.append(rf"{escaped_name}[A-Za-zÅÄÖåäö\-]*")
+
+        tokens = _letter_tokens(n)
+        if not tokens:
+            continue
+
+        # Allow optional whitespace/hyphen (or none) between words: "röd lök" == "rödlök" == "röd-lök".
+        escaped_tokens = [re.escape(t) for t in tokens]
+        joined = r"\s*-?\s*".join(escaped_tokens)
+        parts.append(rf"{joined}{suffix}")
 
     if not parts:
         return escape(text)
 
-    pattern = re.compile(r"(" + "|".join(parts) + r")", flags=re.IGNORECASE)
+    pattern = re.compile(r"(" + "|".join(parts) + r")", flags=re.IGNORECASE | re.UNICODE)
     escaped = escape(text)
     underlined = pattern.sub(r'<span class="text-decoration-underline">\1</span>', escaped)
     return mark_safe(underlined)
