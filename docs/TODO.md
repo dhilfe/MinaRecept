@@ -134,11 +134,16 @@
 ## Fas 4: Mobilapp & Publicering
 
 - [ ] **FR-20251224-05: iOS-app (SwiftUI) MVP**
-    - [ ] Skapa `ios/`-projekt (XcodeGen) och checka in `project.yml`
-    - [ ] Implementera login (token) + lagring (Keychain)
-    - [ ] Receptlista (GET `/api/recipes/`)
-    - [ ] Receptdetalj (GET `/api/recipes/{id}/`) inkl. ingredienser + steg
-    - [ ] Logout
+    - [x] Skapa `ios/`-projekt (XcodeGen) och checka in `project.yml`
+    - [x] Implementera login (token) + lagring (Keychain)
+    - [x] Receptlista (GET `/api/recipes/`)
+    - [x] Receptdetalj (GET `/api/recipes/{id}/`) inkl. ingredienser + steg
+    - [x] Logout
+
+- [ ] **FR-20251225-01: iOS: Inköpslistor (tab)**
+    - [ ] Tab "Inköpslistor" med lista av inköpslistor
+    - [ ] Detaljvy som visar items per inköpslista
+    - [ ] Visa checked-status
 
 - [ ] **Mobilapp (Flutter/React Native)**
     - [ ] Grundläggande vy för receptlista
