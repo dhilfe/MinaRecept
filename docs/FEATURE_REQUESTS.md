@@ -83,3 +83,18 @@ Det här dokumentet används för att spåra feature requests när vi jobbar i b
 - **Påverkar:** ios/, docs
 - **Branch:** feature/fr-20251224-05-ios-app-mvp
 - **Status:** ready-for-merge
+
+---
+
+## FR-20251225-01 – iOS: Inköpslistor (tab)
+- **Beskrivning:** Lägg till en enkel "Inköpslistor"-tab i iOS-appen som kan visa användarens inköpslistor och rader via API.
+- **Acceptanskriterier:**
+  - Tabbar: "Mina recept" och "Inköpslistor".
+  - Inköpslistor: lista (`GET /api/shopping-lists/`).
+  - Inköpslista detalj: visar items för vald lista (`GET /api/shopping-list-items/?shopping_list={id}`).
+  - Checked-status visas tydligt för items.
+- **Avgränsningar:**
+  - Ingen CRUD i iOS i denna FR (endast läsa/visa).
+- **Påverkar:** ios/, docs
+- **Branch:** feature/fr-20251225-01-ios-shopping-lists
+- **Status:** in-progress

@@ -6,7 +6,7 @@ struct RootView: View {
     var body: some View {
         Group {
             if session.isAuthenticated {
-                RecipeListView()
+                MainTabView()
             } else {
                 LoginView()
             }
