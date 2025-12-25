@@ -15,6 +15,14 @@
                         <label for="url" class="form-label">Länk (URL)</label>
                         <input type="text" class="form-control" id="url" name="url" placeholder="exempel.se/recept/...">
                     </div>
+
+                    <div class="text-center text-muted my-3">— eller —</div>
+
+                    <div class="mb-3">
+                        <label for="recipe_text" class="form-label">Klistra in recepttext</label>
+                        <textarea class="form-control" id="recipe_text" name="recipe_text" rows="6" placeholder="Titel\n\nIngredienser:\n- ...\n\nGör så här:\n1. ..."></textarea>
+                        <div class="form-text">Tips: Om importen från länk misslyckas kan du klistra in texten här och använda import-hjälpen i formuläret.</div>
+                    </div>
                     <button type="submit" class="btn btn-primary w-100">Hämta recept</button>
                 </form>
 

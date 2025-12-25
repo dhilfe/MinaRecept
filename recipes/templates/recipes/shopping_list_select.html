@@ -14,10 +14,14 @@
                     <div class="mb-3">
                         <label class="form-label">Befintlig lista</label>
                         <select class="form-select" name="list_id">
-                            <option value="">-- Välj --</option>
                             {% for lst in lists %}
-                                <option value="{{ lst.id }}">{{ lst.name }}{% if lst.is_recurring %} (Återkommande){% endif %}</option>
+                                <option value="{{ lst.id }}" {% if lst.is_main %}selected{% endif %}>
+                                    {{ lst.name }}
+                                    {% if lst.is_main %}(Huvudlista){% endif %}
+                                    {% if lst.is_recurring %}(Återkommande){% endif %}
+                                </option>
                             {% endfor %}
+                            <option value="">-- Skapa ny nedan --</option>
                         </select>
                         <div class="form-text">Välj en lista, eller skapa en ny nedan.</div>
                     </div>

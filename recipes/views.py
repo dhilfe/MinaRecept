@@ -7,6 +7,7 @@ from django.db.models import Q
 from django.contrib import messages
 from .models import Recipe, WeeklyPlan, WeeklyMenu, WeeklyMenuItem, ShoppingList, ShoppingListItem, ShoppingListRecipeSource
 from .forms import RecipeForm, MenuGenerationForm
+from .services import add_ingredients_to_list, to_float, format_amount, upsert_shopping_list_item
 import random
 import requests
 from bs4 import BeautifulSoup
@@ -15,74 +16,42 @@ import re
 import instaloader
 
 
-def _to_float(value: str):
-    try:
-        return float(str(value).strip().replace(',', '.'))
-    except Exception:
-        return None
-
-
-def _format_amount(value: float) -> str:
-    try:
-        if value is None:
-            return ''
-        rounded = round(value)
-        if abs(value - rounded) < 1e-9:
-            return str(int(rounded))
-        return ('{:g}'.format(value)).replace('.', ',')
-    except Exception:
-        return str(value)
-
-
-def _parse_legacy_ingredient_line(line: str):
-    text = (line or '').strip()
-    if not text:
-        return None
-
-    # Strip common bullet/list prefixes
-    text = re.sub(r'^[\s\-•*]+', '', text)
-    text = re.sub(r'^\s*\d+[\).]\s+', '', text)
-
-    # Strip common prefixes like "ca", "cirka", "ungefär"
-    text = re.sub(r'^\s*(ca\.?|cirka|ungefär)\s+', '', text, flags=re.IGNORECASE)
-
-    # Ignore section headers like "Fyllning:" / "Sås:" in imported ingredient lists
-    if re.match(r'^[^:]{1,80}:\s*$', text):
-        return None
-
-    # Examples we want to handle:
-    # - "2 dl mjöl" -> ("mjöl", "2", "dl")
-    # - "1-2 st ägg" -> ("ägg", "1-2", "st")
-    # - "1 1/2 dl mjölk" -> ("mjölk", "1 1/2", "dl")
-    # - "salt" -> ("salt", "", "")
-    amount_re = r'(?:\d+(?:[\.,]\d+)?|\d+/\d+)(?:\s+\d+/\d+)?(?:\s*[–-]\s*\d+(?:[\.,]\d+)?)?'
-    m = re.match(rf'^\s*(?P<amount>{amount_re})\s*(?P<unit>[A-Za-zÅÄÖåäö\.]+)?\s+(?P<name>.+?)\s*$', text)
-    if m:
-        amount = (m.group('amount') or '').strip()
-        unit = (m.group('unit') or '').strip().strip('.')
-        name = (m.group('name') or '').strip()
-        return name, amount, unit
-
-    return text, '', ''
-
-
 @login_required
 def shopping_lists_view(request):
+    # Ensure user has a main list
+    main_list = ShoppingList.objects.filter(user=request.user, is_main=True).first()
+    if not main_list:
+        # Try to find a suitable candidate (not recurring)
+        candidate = ShoppingList.objects.filter(user=request.user, is_recurring=False).order_by('-updated_at').first()
+        if candidate:
+            candidate.is_main = True
+            candidate.save()
+            main_list = candidate
+        else:
+            # Create one
+            main_list = ShoppingList.objects.create(user=request.user, name="Inköpslista", is_main=True)
+
     if request.method == 'POST' and request.POST.get('action') == 'create':
         name = (request.POST.get('name') or '').strip()
         is_recurring = request.POST.get('is_recurring') == '1'
         if name:
-            lst = ShoppingList.objects.create(user=request.user, name=name, is_recurring=is_recurring)
+            lst = ShoppingList.objects.create(user=request.user, name=name, is_recurring=is_recurring, is_main=False)
             return redirect('shopping_list_detail', list_id=lst.id)
 
-    lists = ShoppingList.objects.filter(user=request.user)
-    # annotate unchecked counts (simple python loop to avoid DB specific features)
-    result = []
-    for lst in lists:
-        unchecked = ShoppingListItem.objects.filter(user=request.user, shopping_list=lst, checked=False).count()
-        lst.unchecked_count = unchecked
-        result.append(lst)
-    return render(request, 'recipes/shopping_lists.html', {'lists': result})
+    # Get all other lists
+    saved_lists = ShoppingList.objects.filter(user=request.user).exclude(id=main_list.id).order_by('-updated_at')
+    
+    # Annotate counts
+    unchecked = ShoppingListItem.objects.filter(user=request.user, shopping_list=main_list, checked=False).count()
+    main_list.unchecked_count = unchecked
+
+    result_saved = []
+    for lst in saved_lists:
+        c = ShoppingListItem.objects.filter(user=request.user, shopping_list=lst, checked=False).count()
+        lst.unchecked_count = c
+        result_saved.append(lst)
+
+    return render(request, 'recipes/shopping_lists.html', {'main_list': main_list, 'saved_lists': result_saved})
 
 
 @login_required
@@ -113,51 +82,8 @@ def shopping_list_detail_view(request, list_id: int):
             new_amount = (request.POST.get('new_amount') or '').strip()
             new_unit = (request.POST.get('new_unit') or '').strip()
             if new_name:
-                existing = ShoppingListItem.objects.filter(
-                    user=request.user,
-                    shopping_list=shopping_list,
-                    checked=False,
-                    name__iexact=new_name,
-                    unit__iexact=new_unit,
-                ).first() if new_unit else ShoppingListItem.objects.filter(
-                    user=request.user,
-                    shopping_list=shopping_list,
-                    checked=False,
-                    name__iexact=new_name,
-                    unit='',
-                ).first()
-
-                if existing:
-                    if new_amount:
-                        a1 = _to_float(existing.amount)
-                        a2 = _to_float(new_amount)
-                        if a1 is not None and a2 is not None:
-                            existing.amount = _format_amount(a1 + a2)
-                        elif not existing.amount:
-                            existing.amount = new_amount
-                        else:
-                            # Best-effort merge for non-numeric amounts
-                            existing.amount = f"{existing.amount} + {new_amount}"
-                        existing.save(update_fields=['amount', 'updated_at'])
-                    else:
-                        # Adding an existing ingredient without amount counts as +1
-                        a1 = _to_float(existing.amount)
-                        if a1 is not None:
-                            existing.amount = _format_amount(a1 + 1)
-                        elif not (existing.amount or '').strip():
-                            existing.amount = '1'
-                        else:
-                            existing.amount = f"{existing.amount} + 1"
-                        existing.save(update_fields=['amount', 'updated_at'])
-                else:
-                    ShoppingListItem.objects.create(
-                        user=request.user,
-                        shopping_list=shopping_list,
-                        name=new_name,
-                        amount=new_amount,
-                        unit=new_unit,
-                        checked=False,
-                    )
+                upsert_shopping_list_item(request.user, shopping_list, new_name, new_amount, new_unit)
+            return redirect('shopping_list_detail', list_id=shopping_list.id)
             return redirect('shopping_list_detail', list_id=shopping_list.id)
 
         # Save edits
@@ -191,7 +117,7 @@ def shopping_list_detail_view(request, list_id: int):
 def choose_shopping_list_for_recipe(request, pk):
     recipe = get_object_or_404(Recipe, pk=pk, user=request.user)
 
-    lists = ShoppingList.objects.filter(user=request.user)
+    lists = ShoppingList.objects.filter(user=request.user).order_by('-is_main', '-updated_at')
 
     if request.method == 'GET':
         return render(request, 'recipes/shopping_list_select.html', {'recipe': recipe, 'lists': lists})
@@ -214,111 +140,14 @@ def choose_shopping_list_for_recipe(request, pk):
 
 
 def _add_recipe_ingredients_to_shopping_list(request, recipe: Recipe, shopping_list: ShoppingList):
-    if ShoppingListRecipeSource.objects.filter(user=request.user, shopping_list=shopping_list, recipe=recipe).exists():
+    result = add_ingredients_to_list(request.user, recipe, shopping_list)
+    
+    if result['already_exists']:
         messages.info(request, 'Ingredienser från det här receptet är redan tillagda i den valda listan.')
-        return redirect('shopping_list_detail', list_id=shopping_list.id)
-
-    added = 0
-    merged = 0
-
-    # Try JSON ingredients first
-    ingredients = None
-    try:
-        parsed = json.loads(recipe.ingredients)
-        if isinstance(parsed, list):
-            ingredients = parsed
-    except Exception:
-        ingredients = None
-
-    if ingredients is not None:
-        for ing in ingredients:
-            if not isinstance(ing, dict):
-                continue
-            name = str(ing.get('name') or '').strip()
-            amount = str(ing.get('amount') or '').strip()
-            unit = str(ing.get('unit') or '').strip()
-            if name.endswith(':') and not amount and not unit:
-                continue
-            if not name:
-                continue
-
-            existing = ShoppingListItem.objects.filter(
-                user=request.user,
-                shopping_list=shopping_list,
-                checked=False,
-                name__iexact=name,
-                unit__iexact=unit,
-            ).first() if unit else ShoppingListItem.objects.filter(
-                user=request.user,
-                shopping_list=shopping_list,
-                checked=False,
-                name__iexact=name,
-                unit='',
-            ).first()
-
-            if existing and amount:
-                a1 = _to_float(existing.amount)
-                a2 = _to_float(amount)
-                if a1 is not None and a2 is not None:
-                    existing.amount = _format_amount(a1 + a2)
-                    existing.recipe = recipe
-                    existing.save(update_fields=['amount', 'recipe', 'updated_at'])
-                    merged += 1
-                    continue
-                if a1 is None and a2 is not None and not (existing.amount or '').strip():
-                    existing.amount = amount
-                    existing.recipe = recipe
-                    existing.save(update_fields=['amount', 'recipe', 'updated_at'])
-                    merged += 1
-                    continue
-
-            if existing and not amount:
-                # Ingredient already exists; treat missing amount as +1
-                a1 = _to_float(existing.amount)
-                if a1 is not None:
-                    existing.amount = _format_amount(a1 + 1)
-                elif not (existing.amount or '').strip():
-                    existing.amount = '1'
-                else:
-                    existing.amount = f"{existing.amount} + 1"
-                existing.recipe = recipe
-                existing.save(update_fields=['amount', 'recipe', 'updated_at'])
-                merged += 1
-                continue
-
-            ShoppingListItem.objects.create(
-                user=request.user,
-                shopping_list=shopping_list,
-                recipe=recipe,
-                name=name,
-                amount=amount,
-                unit=unit,
-                checked=False,
-            )
-            added += 1
-    else:
-        # Legacy text lines
-        for line in recipe.ingredients.splitlines():
-            parsed = _parse_legacy_ingredient_line(line)
-            if not parsed:
-                continue
-            name, amount, unit = parsed
-            ShoppingListItem.objects.create(
-                user=request.user,
-                shopping_list=shopping_list,
-                recipe=recipe,
-                name=name,
-                amount=amount,
-                unit=unit,
-                checked=False,
-            )
-            added += 1
-
-    if added or merged:
-        ShoppingListRecipeSource.objects.create(user=request.user, shopping_list=shopping_list, recipe=recipe)
-        msg = f'La till {added} ingredienser.'
-        if merged:
-            msg += f' Slog ihop {merged} rader.'
+    elif result['added'] or result['merged']:
+        msg = f"La till {result['added']} ingredienser."
+        if result['merged']:
+            msg += f" Slog ihop {result['merged']} rader."
         messages.success(request, msg)
     else:
         messages.info(request, 'Inga ingredienser att lägga till.')
@@ -418,6 +247,46 @@ def extract_json_ld(soup):
         except (json.JSONDecodeError, TypeError):
             continue
     return None
+
+
+def _flatten_instruction_texts(node):
+    """Flatten JSON-LD recipeInstructions into a list of step strings."""
+    steps: list[str] = []
+
+    def add_text(value):
+        if value is None:
+            return
+        if isinstance(value, str):
+            v = value.strip()
+            if v:
+                steps.append(v)
+            return
+        if isinstance(value, list):
+            for item in value:
+                add_text(item)
+            return
+        if isinstance(value, dict):
+            # Common patterns:
+            # - HowToStep: {"@type":"HowToStep","text":"..."}
+            # - HowToSection: {"@type":"HowToSection","itemListElement":[...]}
+            # - itemListElement can also appear without explicit @type.
+            if 'text' in value:
+                add_text(value.get('text'))
+                return
+
+            if 'itemListElement' in value:
+                add_text(value.get('itemListElement'))
+                return
+
+            # Fallback: try a few commonly used keys.
+            for key in ('name', 'description'):
+                if key in value:
+                    add_text(value.get(key))
+                    return
+
+    add_text(node)
+    # Deduplicate empty lines while preserving order
+    return [s for s in steps if s]
 
 class RecipeListView(LoginRequiredMixin, ListView):
     model = Recipe
@@ -756,19 +625,45 @@ def recipe_import(request):
 
             try:
                 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+
+                def fetch(fetch_url: str):
+                    resp = requests.get(fetch_url, headers=headers, timeout=10)
+                    resp.raise_for_status()
+                    return resp
+
                 try:
-                    response = requests.get(url, headers=headers, timeout=10)
-                    response.raise_for_status()
-                except requests.RequestException:
+                    response = fetch(url)
+                except requests.RequestException as e:
+                    retry_succeeded = False
                     # Retry with www if not present
                     if 'www.' not in url:
-                        url_parts = url.split('://')
-                        url_www = f"{url_parts[0]}://www.{url_parts[1]}"
-                        response = requests.get(url_www, headers=headers, timeout=10)
-                        response.raise_for_status()
-                        url = url_www
-                    else:
-                        raise
+                        try:
+                            url_parts = url.split('://')
+                            url_www = f"{url_parts[0]}://www.{url_parts[1]}"
+                            response = fetch(url_www)
+                            url = url_www
+                            retry_succeeded = True
+                        except requests.RequestException as e2:
+                            e = e2
+
+                    if not retry_succeeded:
+                        # Give a user-friendly error message.
+                        if isinstance(e, requests.Timeout):
+                            messages.error(request, "Kunde inte hämta recept: Tidsgränsen överskreds. Prova igen eller testa en annan länk.")
+                            return render(request, 'recipes/recipe_import.html')
+                        if isinstance(e, requests.ConnectionError):
+                            messages.error(request, "Kunde inte hämta recept: Kunde inte ansluta till sidan. Kontrollera att länken fungerar och prova igen.")
+                            return render(request, 'recipes/recipe_import.html')
+                        if isinstance(e, requests.HTTPError):
+                            status_code = getattr(getattr(e, 'response', None), 'status_code', None)
+                            if status_code:
+                                messages.error(request, f"Kunde inte hämta recept: Sidan svarade med HTTP {status_code}.")
+                            else:
+                                messages.error(request, "Kunde inte hämta recept: Sidan svarade med ett fel.")
+                            return render(request, 'recipes/recipe_import.html')
+
+                        messages.error(request, "Kunde inte hämta recept: Okänt nätverksfel. Prova igen eller testa en annan länk.")
+                        return render(request, 'recipes/recipe_import.html')
 
                 soup = BeautifulSoup(response.content, 'html.parser')
                 
@@ -797,14 +692,7 @@ def recipe_import(request):
                         
                     # Instructions
                     raw_instructions = recipe_data.get('recipeInstructions', [])
-                    if isinstance(raw_instructions, list):
-                        for step in raw_instructions:
-                            if isinstance(step, dict):
-                                steps.append(step.get('text', ''))
-                            elif isinstance(step, str):
-                                steps.append(step)
-                    elif isinstance(raw_instructions, str):
-                        steps = [raw_instructions]
+                    steps = _flatten_instruction_texts(raw_instructions)
                         
                     # Time
                     total_time = recipe_data.get('totalTime')
@@ -874,6 +762,10 @@ def recipe_import(request):
                     'cooking_time': cooking_time,
                     'servings': servings,
                 }
+
+                if not initial_data['title'] and not initial_data['ingredients'].strip() and not initial_data['steps'].strip():
+                    messages.error(request, "Kunde inte hämta recept: Hittade inget recept-innehåll på sidan. Prova en annan länk eller skapa receptet manuellt.")
+                    return render(request, 'recipes/recipe_import.html')
                 
 
                 # Pass image URL through to the create form so the user can choose to save it.

@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Köket Test</title>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Recipe",
+        "name": "Köket Fixture Recipe",
+        "description": "Synthetic fixture for importer tests.",
+        "image": ["https://example.com/koket.jpg"],
+        "recipeIngredient": ["200 g pasta"],
+        "recipeInstructions": {
+          "@type": "HowToSection",
+          "name": "Tillagning",
+          "itemListElement": [
+            "Koka pastan.",
+            {"@type": "HowToStep", "text": "Häll av och blanda."}
+          ]
+        },
+        "totalTime": "PT20M",
+        "recipeYield": "3 portioner"
+      }
+    </script>
+  </head>
+  <body>
+    <h1>Köket Fixture</h1>
+  </body>
+</html>

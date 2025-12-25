@@ -27,6 +27,7 @@ class Recipe(models.Model):
     tags = models.CharField(max_length=200, blank=True, help_text="Kommaseparerade taggar", verbose_name="Taggar")
     servings = models.PositiveIntegerField(default=4, verbose_name="Antal portioner")
     image = models.ImageField(upload_to='recipes/', blank=True, null=True, verbose_name="Bild")
+    image_url = models.URLField(blank=True, null=True, verbose_name="Bild-URL")
     is_favorite = models.BooleanField(default=False, verbose_name="Favorit")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Skapad")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Uppdaterad")
@@ -96,6 +97,7 @@ class ShoppingList(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name="Användare")
     name = models.CharField(max_length=120, verbose_name="Namn")
     is_recurring = models.BooleanField(default=False, verbose_name="Återkommande")
+    is_main = models.BooleanField(default=False, verbose_name="Huvudlista")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Skapad")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Uppdaterad")
 

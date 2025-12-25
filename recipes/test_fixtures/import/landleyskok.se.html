@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Landleys Test</title>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Recipe",
+            "name": "Landleyskok Fixture Recipe",
+            "description": "Synthetic fixture for importer tests.",
+            "image": ["https://example.com/landleys.jpg"],
+            "recipeIngredient": ["1 dl mjöl", "2 st ägg"],
+            "recipeInstructions": [
+              {
+                "@type": "HowToSection",
+                "name": "Del 1",
+                "itemListElement": [
+                  {"@type": "HowToStep", "text": "Blanda torra ingredienser."},
+                  {"@type": "HowToStep", "text": "Vispa ner ägg."}
+                ]
+              }
+            ],
+            "totalTime": "PT30M",
+            "recipeYield": "4 portioner"
+          }
+        ]
+      }
+    </script>
+  </head>
+  <body>
+    <h1>Landleys Fixture</h1>
+  </body>
+</html>

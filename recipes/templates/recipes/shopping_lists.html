@@ -7,6 +7,28 @@
             <h2 class="mb-0">Inköpslistor</h2>
         </div>
 
+        <!-- Main List -->
+        {% if main_list %}
+        <div class="card mb-4 border-primary">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0">Min Inköpslista</h5>
+            </div>
+            <div class="list-group list-group-flush">
+                <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" href="{% url 'shopping_list_detail' main_list.id %}">
+                    <div>
+                        <div class="fw-semibold">{{ main_list.name }}</div>
+                        <div class="text-muted small">
+                            <span class="ms-1">{{ main_list.unchecked_count }} varor kvar</span>
+                        </div>
+                    </div>
+                    <span class="badge bg-primary rounded-pill">Öppna</span>
+                </a>
+            </div>
+        </div>
+        {% endif %}
+
+        <h4 class="mb-3">Sparade listor</h4>
+
         <div class="card mb-3">
             <div class="card-body">
                 <form method="post" class="row g-2 align-items-end">
@@ -24,14 +46,14 @@
                         </div>
                     </div>
                     <div class="col-12 col-md-2 d-grid">
-                        <button type="submit" class="btn btn-primary">Skapa</button>
+                        <button type="submit" class="btn btn-outline-primary">Spara ny</button>
                     </div>
                 </form>
             </div>
         </div>
 
         <div class="list-group">
-            {% for lst in lists %}
+            {% for lst in saved_lists %}
                 <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" href="{% url 'shopping_list_detail' lst.id %}">
                     <div>
                         <div class="fw-semibold">{{ lst.name }}</div>
@@ -43,7 +65,7 @@
                     <span class="text-muted">Öppna</span>
                 </a>
             {% empty %}
-                <div class="list-group-item text-muted">Inga inköpslistor ännu. Skapa en ovan.</div>
+                <div class="list-group-item text-muted">Inga sparade listor.</div>
             {% endfor %}
         </div>
     </div>
