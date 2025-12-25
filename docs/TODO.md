@@ -122,9 +122,9 @@
     - [x] Gör dem klickbara för att starta en nedräkning direkt i vyn
 
 - [ ] **FR-20251224-04: Understryk ingredienser i instruktioner**
-    - [ ] Understryk ingrediensnamn i "Gör så här" (receptdetalj)
-    - [ ] Understryk ingrediensnamn i Cook Mode steg-text
-    - [ ] Lägg test som verifierar understrykning
+    - [x] Understryk ingrediensnamn i "Gör så här" (receptdetalj)
+    - [x] Understryk ingrediensnamn i Cook Mode steg-text
+    - [x] Lägg test som verifierar understrykning
 
 - [ ] **Minimalistisk Design**
     - [x] Rensa upp receptvyn: Fokus på Bild, Ingredienser, Steg
@@ -132,6 +132,13 @@
     - [x] Rensa upp receptlistan: större fokus på bild + titel
 
 ## Fas 4: Mobilapp & Publicering
+
+- [ ] **FR-20251224-05: iOS-app (SwiftUI) MVP**
+    - [ ] Skapa `ios/`-projekt (XcodeGen) och checka in `project.yml`
+    - [ ] Implementera login (token) + lagring (Keychain)
+    - [ ] Receptlista (GET `/api/recipes/`)
+    - [ ] Receptdetalj (GET `/api/recipes/{id}/`) inkl. ingredienser + steg
+    - [ ] Logout
 
 - [ ] **Mobilapp (Flutter/React Native)**
     - [ ] Grundläggande vy för receptlista

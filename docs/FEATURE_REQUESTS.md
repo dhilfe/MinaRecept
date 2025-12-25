@@ -65,3 +65,21 @@ Det här dokumentet används för att spåra feature requests när vi jobbar i b
 - **Påverkar:** templates, templatetags, tests
 - **Branch:** feature/fr-20251224-04-underline-ingredients
 - **Status:** ready-for-merge
+
+---
+
+## FR-20251224-05 – iOS-app (SwiftUI) MVP
+- **Beskrivning:** Bygg en körbar iOS-app som använder ReceptApps API. Fokus på en minimal men användbar klient: login → receptlista → receptdetalj (ingredienser + steg) → Cook Mode.
+- **Acceptanskriterier:**
+  - App kan logga in mot `/api/auth/token/` och spara token lokalt.
+  - App kan hämta `/api/recipes/` och visa lista.
+  - App kan visa detaljvy för recept och rendera ingredienslistan (parsar `ingredients` JSON-strängen).
+  - App har en enkel Cook Mode-vy (steg-för-steg) med Nästa/Föregående.
+  - Cook Mode detekterar tidsuttryck (t.ex. "10 min", "1 h 30 min") och kan starta en nedräkning.
+  - Logout rensar token och återgår till login.
+  - Projekt kan genereras/byggas via Xcode (scaffold via XcodeGen).
+- **Avgränsningar:**
+  - Ingen inköpslista/veckoplan i iOS i denna FR (kommer senare).
+- **Påverkar:** ios/, docs
+- **Branch:** feature/fr-20251224-05-ios-app-mvp
+- **Status:** in-progress
