@@ -50,7 +50,7 @@ class RecipeSerializer(serializers.ModelSerializer):
 class ShoppingListSerializer(serializers.ModelSerializer):
     class Meta:
         model = ShoppingList
-        fields = ['id', 'user', 'name', 'is_recurring', 'created_at', 'updated_at']
+        fields = ['id', 'user', 'name', 'is_recurring', 'is_main', 'created_at', 'updated_at']
         read_only_fields = ['user', 'created_at', 'updated_at']
 
 

@@ -157,6 +157,20 @@ final class APIClient {
             throw APIError.decoding(error)
         }
     }
+    func addIngredientsToShoppingList(recipeId: Int, shoppingListId: Int?, token: String) async throws {
+        let url = try url("recipes/\(recipeId)/add-to-shopping-list/")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body = AddToShoppingListRequest(shopping_list_id: shoppingListId)
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else { throw APIError.httpStatus(http.statusCode) }
+    }
 }
 
 private struct LoginRequest: Codable {
@@ -166,4 +180,8 @@ private struct LoginRequest: Codable {
 
 private struct TokenResponse: Codable {
     let token: String
+}
+
+private struct AddToShoppingListRequest: Codable {
+    let shopping_list_id: Int?
 }

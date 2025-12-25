@@ -6,6 +6,8 @@ struct RecipeDetailView: View {
     @State private var recipe: RecipeDTO
     @State private var isLoading: Bool = false
     @State private var errorMessage: String? = nil
+    @State private var showShoppingListSheet = false
+    @State private var shoppingLists: [ShoppingListDTO] = []
 
     init(recipe: RecipeDTO) {
         _recipe = State(initialValue: recipe)
@@ -49,6 +51,9 @@ struct RecipeDetailView: View {
                 Section("Ingredienser") {
                     ForEach(ingredients) { ing in
                         Text(formatIngredient(ing))
+                    }
+                    Button("Lägg till i inköpslista") {
+                        showShoppingListSheet = true
                     }
                 }
             }
@@ -96,6 +101,14 @@ struct RecipeDetailView: View {
         .task {
             await loadRecipe()
         }
+        .confirmationDialog("Välj inköpslista", isPresented: $showShoppingListSheet) {
+            ForEach(shoppingLists) { list in
+                Button(list.name) {
+                    Task { await addToShoppingList(listId: list.id) }
+                }
+            }
+            Button("Avbryt", role: .cancel) {}
+        }
         .refreshable {
             await loadRecipe()
         }
@@ -138,7 +151,24 @@ struct RecipeDetailView: View {
 
         return byLines
     }
+async let recipeTask = APIClient.shared.fetchRecipe(id: recipe.id, token: token)
+            async let listsTask = APIClient.shared.fetchShoppingLists(token: token)
+            
+            let (fetchedRecipe, fetchedLists) = try await (recipeTask, listsTask)
+            recipe = fetchedRecipe
+            shoppingLists = fetchedLists
+        } catch {
+            errorMessage = APIError.userFacingMessage(for: error)
+        }
+    }
 
+    private func addToShoppingList(listId: Int) async {
+        guard let token = session.token else { return }
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            try await APIClient.shared.addIngredientsToShoppingList(recipeId: recipe.id, shoppingListId: listI
     private func loadRecipe() async {
         guard let token = session.token else { return }
         isLoading = true

@@ -54,6 +54,15 @@ class RecipeTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Test Recipe')
 
+    def test_recipe_detail_has_add_to_shopping_list_button(self):
+        """Ensure the 'Add to shopping list' button is present on the recipe detail page."""
+        response = self.client.get(reverse('recipe_detail', args=[self.recipe.pk]))
+        self.assertEqual(response.status_code, 200)
+        # Check for the link to choose_shopping_list_for_recipe
+        expected_url = reverse('choose_shopping_list_for_recipe', args=[self.recipe.pk])
+        self.assertContains(response, expected_url)
+        self.assertContains(response, 'Lägg till i inköpslista')
+
     def test_add_ingredients_to_shopping_list(self):
         response = self.client.post(
             reverse('choose_shopping_list_for_recipe', args=[self.recipe.pk]),

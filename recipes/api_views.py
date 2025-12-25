@@ -84,7 +84,7 @@ class RecipeViewSet(OwnedModelViewSet):
 
 
 class ShoppingListViewSet(OwnedModelViewSet):
-    queryset = ShoppingList.objects.all().order_by('-updated_at', '-created_at')
+    queryset = ShoppingList.objects.all().order_by('-is_main', '-updated_at', '-created_at')
     serializer_class = ShoppingListSerializer
 
 
