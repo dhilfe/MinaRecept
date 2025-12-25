@@ -97,4 +97,4 @@ Det här dokumentet används för att spåra feature requests när vi jobbar i b
   - Ingen CRUD i iOS i denna FR (endast läsa/visa).
 - **Påverkar:** ios/, docs
 - **Branch:** feature/fr-20251225-01-ios-shopping-lists
-- **Status:** in-progress
+- **Status:** ready-for-merge
