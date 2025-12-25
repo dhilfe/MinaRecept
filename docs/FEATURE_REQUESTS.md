@@ -82,4 +82,4 @@ Det här dokumentet används för att spåra feature requests när vi jobbar i b
   - Ingen inköpslista/veckoplan i iOS i denna FR (kommer senare).
 - **Påverkar:** ios/, docs
 - **Branch:** feature/fr-20251224-05-ios-app-mvp
-- **Status:** in-progress
+- **Status:** ready-for-merge
