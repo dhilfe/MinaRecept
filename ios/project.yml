@@ -1,0 +1,30 @@
+name: ReceptAppiOS
+options:
+  deploymentTarget:
+    iOS: "16.0"
+
+targets:
+  ReceptAppiOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: ReceptAppiOS/Sources
+    resources:
+      - path: ReceptAppiOS/Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: se.receptapp.ios
+        INFOPLIST_KEY_CFBundleDisplayName: ReceptApp
+        INFOPLIST_KEY_API_BASE_URL: http://localhost:8000/api/
+    info:
+      path: ReceptAppiOS/Resources/Info.plist
+      properties:
+        API_BASE_URL: $(INFOPLIST_KEY_API_BASE_URL)
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            localhost:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+            127.0.0.1:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
