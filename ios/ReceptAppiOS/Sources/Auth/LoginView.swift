@@ -82,7 +82,11 @@ struct LoginView: View {
             let token = try await APIClient.shared.login(username: username, password: password)
             session.setToken(token)
         } catch {
-            errorMessage = APIError.userFacingMessage(for: error)
+            if let apiError = error as? APIError, case .httpStatus(400, _) = apiError {
+                errorMessage = "Fel användarnamn eller lösenord."
+            } else {
+                errorMessage = APIError.userFacingMessage(for: error)
+            }
         }
     }
 }

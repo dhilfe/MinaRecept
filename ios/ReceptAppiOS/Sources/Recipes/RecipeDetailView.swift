@@ -6,8 +6,7 @@ struct RecipeDetailView: View {
     @State private var recipe: RecipeDTO
     @State private var isLoading: Bool = false
     @State private var errorMessage: String? = nil
-    @State private var showShoppingListSheet = false
-    @State private var shoppingLists: [ShoppingListDTO] = []
+    @State private var showSuccessAlert = false
 
     init(recipe: RecipeDTO) {
         _recipe = State(initialValue: recipe)
@@ -25,7 +24,7 @@ struct RecipeDetailView: View {
                 }
             }
 
-            if let url = recipe.imageURL {
+            if let url = recipe.preferredImageURL {
                 Section {
                     AsyncImage(url: url) { image in
                         image
@@ -38,6 +37,19 @@ struct RecipeDetailView: View {
                     .clipped()
                 }
                 .listRowInsets(EdgeInsets())
+            }
+
+            Section {
+                Picker("Kategori", selection: Binding(
+                    get: { recipe.dishType ?? "lunch_dinner" },
+                    set: { newValue in
+                        Task { await updateDishType(newValue) }
+                    }
+                )) {
+                    ForEach(RecipeDTO.allDishTypes, id: \.id) { type in
+                        Text(type.name).tag(type.id)
+                    }
+                }
             }
 
             if let description = recipe.description, !description.isEmpty {
@@ -53,8 +65,9 @@ struct RecipeDetailView: View {
                         Text(formatIngredient(ing))
                     }
                     Button("Lägg till i inköpslista") {
-                        showShoppingListSheet = true
+                        Task { await addToShoppingList() }
                     }
+                    .disabled(isLoading)
                 }
             }
 
@@ -101,13 +114,10 @@ struct RecipeDetailView: View {
         .task {
             await loadRecipe()
         }
-        .confirmationDialog("Välj inköpslista", isPresented: $showShoppingListSheet) {
-            ForEach(shoppingLists) { list in
-                Button(list.name) {
-                    Task { await addToShoppingList(listId: list.id) }
-                }
-            }
-            Button("Avbryt", role: .cancel) {}
+        .alert("Tillagt", isPresented: $showSuccessAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Ingredienserna har lagts till i din inköpslista.")
         }
         .refreshable {
             await loadRecipe()
@@ -151,24 +161,7 @@ struct RecipeDetailView: View {
 
         return byLines
     }
-async let recipeTask = APIClient.shared.fetchRecipe(id: recipe.id, token: token)
-            async let listsTask = APIClient.shared.fetchShoppingLists(token: token)
-            
-            let (fetchedRecipe, fetchedLists) = try await (recipeTask, listsTask)
-            recipe = fetchedRecipe
-            shoppingLists = fetchedLists
-        } catch {
-            errorMessage = APIError.userFacingMessage(for: error)
-        }
-    }
 
-    private func addToShoppingList(listId: Int) async {
-        guard let token = session.token else { return }
-        isLoading = true
-        defer { isLoading = false }
-        
-        do {
-            try await APIClient.shared.addIngredientsToShoppingList(recipeId: recipe.id, shoppingListId: listI
     private func loadRecipe() async {
         guard let token = session.token else { return }
         isLoading = true
@@ -177,6 +170,37 @@ async let recipeTask = APIClient.shared.fetchRecipe(id: recipe.id, token: token)
 
         do {
             recipe = try await APIClient.shared.fetchRecipe(id: recipe.id, token: token)
+        } catch {
+            errorMessage = APIError.userFacingMessage(for: error)
+        }
+    }
+
+    private func addToShoppingList() async {
+        guard let token = session.token else { return }
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            try await APIClient.shared.addIngredientsToShoppingList(recipeId: recipe.id, shoppingListId: nil, token: token)
+            showSuccessAlert = true
+        } catch {
+            errorMessage = APIError.userFacingMessage(for: error)
+        }
+    }
+
+    private func updateDishType(_ newType: String) async {
+        guard let token = session.token else { return }
+        // Don't set isLoading = true here as it might block the UI too much for a simple picker change
+        // or we can use a separate loading state if needed.
+        // For now, let's just do it.
+        
+        do {
+            let updatedRecipe = try await APIClient.shared.updateRecipe(
+                id: recipe.id,
+                fields: ["dish_type": newType],
+                token: token
+            )
+            recipe = updatedRecipe
         } catch {
             errorMessage = APIError.userFacingMessage(for: error)
         }

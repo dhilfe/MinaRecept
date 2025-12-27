@@ -26,7 +26,7 @@ class RecipeTests(TestCase):
             steps='Step 1\nStep 2',
             cooking_time=30,
             difficulty='easy',
-            dish_type='everyday',
+            dish_type='lunch_dinner',
             servings=4
         )
 
@@ -179,20 +179,36 @@ class RecipeTests(TestCase):
                 user=self.user,
                 title=f'Recipe {i}',
                 cooking_time=10,
-                servings=2
+                servings=2,
+                dish_type='lunch_dinner'
             )
             
-        response = self.client.post(reverse('generate_random_menu'))
+        response = self.client.post(reverse('generate_random_menu'), {'servings': 4})
         self.assertEqual(response.status_code, 302)
         self.assertEqual(WeeklyPlan.objects.filter(user=self.user).count(), 7)
+
+    def test_random_menu_no_dinners(self):
+        # Ensure we truly have no lunch/dinner recipes for the default filter.
+        Recipe.objects.filter(user=self.user).delete()
+
+        # Create recipes but no dinners
+        Recipe.objects.create(user=self.user, title='Breakfast', dish_type='breakfast', cooking_time=10)
+        
+        response = self.client.post(reverse('generate_random_menu'), {'servings': 4}, follow=True)
+        self.assertEqual(response.status_code, 200)
+        # Should redirect back to weekly plan with error
+        messages = list(get_messages(response.wsgi_request))
+        self.assertTrue(any("Inga lunch-/middagsrecept hittades" in str(m) for m in messages))
+        self.assertEqual(WeeklyPlan.objects.filter(user=self.user).count(), 0)
 
     def test_random_menu_with_filters(self):
         # Create recipes with different types
         Recipe.objects.create(user=self.user, title='Veg', dish_type='vegetarian', cooking_time=20)
-        Recipe.objects.create(user=self.user, title='Meat', dish_type='everyday', cooking_time=40)
+        Recipe.objects.create(user=self.user, title='Meat', dish_type='lunch_dinner', cooking_time=40)
         
         # Filter for vegetarian
         response = self.client.post(reverse('generate_random_menu'), {
+            'servings': 4,
             'include_types': ['vegetarian']
         })
         self.assertEqual(response.status_code, 302)
@@ -207,7 +223,7 @@ class RecipeTests(TestCase):
         response = self.client.post(reverse('save_weekly_menu'), {'menu_name': 'Julvecka'})
         self.assertEqual(response.status_code, 302)
         menu = WeeklyMenu.objects.get(user=self.user)
-        self.assertEqual(menu.name, 'Julvecka')
+        self.assertEqual(menu.name, 'Julvecka (4p)')
         self.assertEqual(menu.items.count(), 1)
 
     def test_save_weekly_menu_default_next_week_number(self):
@@ -220,7 +236,7 @@ class RecipeTests(TestCase):
         expected_week = int(iso.week)
         expected_year = int(iso.year)
 
-        self.assertEqual(menu.name, f"Vecka {expected_week}")
+        self.assertEqual(menu.name, f"Vecka {expected_week} (4p)")
         self.assertEqual(menu.week_number, expected_week)
         self.assertEqual(menu.year, expected_year)
 
@@ -306,7 +322,7 @@ class RecipeTests(TestCase):
         self.assertEqual(data['steps'], '')       # Should be empty now
         
         # Description should be clean
-        self.assertIn('(Importerad från Instagram: https://instagram.com/p/123)', data['description'])
+        self.assertFalse('(Importerad från' in (data.get('description') or ''))
         
         # Raw text should be in imported_text
         self.assertIn('My Insta Recipe\n\nIngredients:\n- 1 egg\n\nSteps:\n1. Cook it.', data['imported_text'])
@@ -476,7 +492,11 @@ class ApiTests(TestCase):
         mock_get.return_value = mock_response
 
         self._auth1()
-        response = self.client_api.post('/api/recipes/import/', {'url': 'https://ica.se/recept/test'}, format='json')
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {'url': 'https://ica.se/recept/test', 'dish_type': 'dessert'},
+            format='json',
+        )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data['title'], 'ICA Fixture Recipe')
 
@@ -484,7 +504,24 @@ class ApiTests(TestCase):
         recipe_id = response.data['id']
         created = Recipe.objects.get(id=recipe_id)
         self.assertEqual(created.user_id, self.user1.id)
+        self.assertEqual(created.dish_type, 'dessert')
         self.assertIn('Värm oljan.', created.steps)
+
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_rejects_invalid_dish_type(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        fixture_path = Path(__file__).resolve().parent / 'test_fixtures' / 'import' / 'ica.se.html'
+        mock_response.content = fixture_path.read_bytes()
+        mock_get.return_value = mock_response
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {'url': 'https://ica.se/recept/test', 'dish_type': 'not-a-type'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_api_token_obtain(self):
         response = self.client_api.post(

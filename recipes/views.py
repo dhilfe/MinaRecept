@@ -479,6 +479,7 @@ def generate_random_menu(request):
     if request.method == 'POST':
         form = MenuGenerationForm(request.POST)
         if form.is_valid():
+            servings = form.cleaned_data.get('servings', 4)
             max_time = form.cleaned_data.get('max_cooking_time')
             include_types = form.cleaned_data.get('include_types')
             exclude_types = form.cleaned_data.get('exclude_types')
@@ -488,8 +489,13 @@ def generate_random_menu(request):
             if max_time:
                 queryset = queryset.filter(cooking_time__lte=max_time)
             
+            is_default_filter = False
             if include_types:
                 queryset = queryset.filter(dish_type__in=include_types)
+            else:
+                # Default to lunch/dinner if no types specified
+                queryset = queryset.filter(dish_type='lunch_dinner')
+                is_default_filter = True
             
             if exclude_types:
                 queryset = queryset.exclude(dish_type__in=exclude_types)
@@ -497,7 +503,10 @@ def generate_random_menu(request):
             recipes = list(queryset)
             
             if not recipes:
-                messages.error(request, "Inga recept matchade dina kriterier.")
+                if is_default_filter:
+                    messages.error(request, "Inga lunch-/middagsrecept hittades. Kategorisera dina recept som 'Lunch/Middag' eller välj andra typer.")
+                else:
+                    messages.error(request, "Inga recept matchade dina kriterier.")
                 return redirect('weekly_plan')
 
             # Clear existing
@@ -512,9 +521,9 @@ def generate_random_menu(request):
             days = [d[0] for d in WeeklyPlan.DAYS_OF_WEEK]
             
             for day, recipe in zip(days, selected_recipes):
-                WeeklyPlan.objects.create(user=request.user, day=day, recipe=recipe)
+                WeeklyPlan.objects.create(user=request.user, day=day, recipe=recipe, servings=servings)
             
-            messages.success(request, "Veckomeny skapad!")
+            messages.success(request, f"Veckomeny skapad för {servings} portioner!")
             
     return redirect('weekly_plan')
 
@@ -548,11 +557,18 @@ def save_weekly_menu(request):
     if not name:
         name = f"Vecka {week_number}"
 
+    # Use servings from the first item, or default to 4
+    servings = items[0].servings if items else 4
+
+    # Append servings to name
+    name = f"{name} ({servings}p)"
+
     menu = WeeklyMenu.objects.create(
         user=request.user,
         name=name,
         week_number=week_number,
         year=year,
+        servings=servings,
     )
 
     for it in items:
@@ -573,7 +589,7 @@ def recipe_import(request):
             
             initial_data = {
                 'title': title,
-                'description': f"{recipe_text[:500]}...\n\n(Importerad från text)",
+                'description': f"{recipe_text[:500]}...",
                 'ingredients': '\n'.join(ingredients),
                 'steps': '\n'.join(steps),
             }
@@ -607,7 +623,7 @@ def recipe_import(request):
                             
                         initial_data = {
                             'title': title_line,
-                            'description': f"(Importerad från Instagram: {url})", # Keep description clean
+                            'description': "", # Keep description clean
                             'ingredients': '',
                             'steps': '',
                             'imported_text': full_text, # Raw text for the helper tool
@@ -756,7 +772,7 @@ def recipe_import(request):
                 # Prepare data for form
                 initial_data = {
                     'title': title.strip(),
-                    'description': f"{description[:1000]}\n\n(Importerad från: {url})",
+                    'description': f"{description[:1000]}",
                     'ingredients': '\n'.join(ingredients),
                     'steps': '\n'.join(steps),
                     'cooking_time': cooking_time,
@@ -779,6 +795,56 @@ def recipe_import(request):
                 messages.error(request, f"Kunde inte hämta recept: {str(e)}")
     
     return render(request, 'recipes/recipe_import.html')
+
+@login_required
+def recipe_import_image(request):
+    if request.method == 'POST':
+        image_file = request.FILES.get('recipe_image')
+        if image_file:
+            from .ocr_service import ImageRecipeParser
+            parser = ImageRecipeParser()
+            
+            # Parse image
+            data = parser.parse_image(image_file)
+            
+            # Save to session
+            request.session['import_data'] = data
+            
+            # We might want to save the image temporarily to show it in the create view?
+            # For now, let's just pass the text data.
+            # Ideally, we would save the image to a temp location and pass the path,
+            # so the user can attach it to the recipe.
+            
+            return redirect('recipe_create')
+            
+    return render(request, 'recipes/recipe_import_image.html')
+
+@login_required
+def add_weekly_menu_to_shopping_list(request):
+    if request.method == 'POST':
+        # Get main shopping list
+        shopping_list = ShoppingList.objects.filter(user=request.user, is_main=True).first()
+        if not shopping_list:
+            shopping_list = ShoppingList.objects.create(user=request.user, name="Inköpslista", is_main=True)
+        
+        weekly_plan = WeeklyPlan.objects.filter(user=request.user)
+        if not weekly_plan:
+            messages.info(request, "Ingen veckomeny att lägga till.")
+            return redirect('weekly_plan')
+            
+        total_added = 0
+        total_merged = 0
+        
+        for item in weekly_plan:
+            # We use force=True to allow adding even if the recipe is already in the list
+            result = add_ingredients_to_list(request.user, item.recipe, shopping_list, target_servings=item.servings, force=True)
+            total_added += result['added']
+            total_merged += result['merged']
+            
+        messages.success(request, f"La till {total_added} ingredienser och uppdaterade {total_merged} rader i inköpslistan.")
+        return redirect('shopping_list_detail', list_id=shopping_list.id)
+        
+    return redirect('weekly_plan')
 
 @login_required
 def bookmarklet_view(request):

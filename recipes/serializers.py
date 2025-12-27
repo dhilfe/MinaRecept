@@ -48,13 +48,17 @@ class RecipeSerializer(serializers.ModelSerializer):
 
 
 class ShoppingListSerializer(serializers.ModelSerializer):
+    item_count = serializers.IntegerField(source='items.count', read_only=True)
+
     class Meta:
         model = ShoppingList
-        fields = ['id', 'user', 'name', 'is_recurring', 'is_main', 'created_at', 'updated_at']
+        fields = ['id', 'user', 'name', 'is_recurring', 'is_main', 'created_at', 'updated_at', 'item_count']
         read_only_fields = ['user', 'created_at', 'updated_at']
 
 
 class ShoppingListItemSerializer(serializers.ModelSerializer):
+    recipe_title = serializers.CharField(source='recipe.title', read_only=True)
+
     class Meta:
         model = ShoppingListItem
         fields = [
@@ -62,6 +66,7 @@ class ShoppingListItemSerializer(serializers.ModelSerializer):
             'user',
             'shopping_list',
             'recipe',
+            'recipe_title',
             'name',
             'amount',
             'unit',
@@ -134,5 +139,5 @@ class WeeklyMenuSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = WeeklyMenu
-        fields = ['id', 'user', 'name', 'week_number', 'year', 'created_at', 'items']
+        fields = ['id', 'user', 'name', 'week_number', 'year', 'servings', 'created_at', 'items']
         read_only_fields = ['user', 'created_at']

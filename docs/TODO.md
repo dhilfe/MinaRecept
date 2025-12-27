@@ -55,6 +55,7 @@
     - [x] Deep linking till huvudappen
 
 
+
 - [ ] **Robust Recept-import från URL**
     - [x] Hämta HTML från URL
     - [x] Extrahera data via JSON-LD (strukturerad data)
@@ -113,7 +114,11 @@
     - [ ] Koppla socialt konto till befintligt konto
 
 - [ ] **Avancerad Import**
-    - [ ] OCR-tolkning av bilder (Fota recept)
+    - [ ] **FR-20251226-01: OCR-tolkning av bilder (Fota recept)**
+        - [x] UI för bilduppladdning
+        - [x] Backend-stöd för bildhantering
+        - [ ] Integration mot OCR/Vision-tjänst (OpenAI/Tesseract)
+        - [ ] **TEST:** Verifiera flödet med riktig OpenAI API-nyckel
     - [ ] Webbläsartillägg
 
 ## Fas 3: Anchovy-inspirerad UX (Fokus på matlagning)
@@ -160,6 +165,13 @@
     - [ ] Bestäm riktig prod-domän/endpoint (ersätt placeholder)
     - [ ] Uppdatera `ios/project.yml` (Release `INFOPLIST_KEY_API_BASE_URL`)
     - [ ] Verifiera att Release-build startar och kan logga in mot prod
+
+- [ ] **iOS: Share Extension Auth (App Groups)**
+    - [ ] Konfigurera App Groups i Apple Developer Portal
+    - [ ] Uppdatera `project.yml` med App Group entitlements
+    - [ ] Dela Keychain/Token mellan huvudapp och extension
+    - [ ] Verifiera att Share Extension kan posta recept som inloggad användare
+
 
 - [ ] **Mobilapp (Flutter/React Native)**
     - [ ] Grundläggande vy för receptlista

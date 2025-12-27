@@ -40,11 +40,33 @@ if [[ "$(uname)" == "Darwin" ]] && command -v xcodebuild >/dev/null 2>&1 && comm
 			DESTINATION="platform=iOS Simulator,name=$DEST_NAME,OS=$DEST_OS"
 		fi
 
-		if command -v xcpretty >/dev/null 2>&1; then
-			xcodebuild test -project ReceptAppiOS.xcodeproj -scheme ReceptAppiOS -destination "$DESTINATION" | xcpretty
-		else
-			xcodebuild test -project ReceptAppiOS.xcodeproj -scheme ReceptAppiOS -destination "$DESTINATION"
-		fi
+			LOG_FILE="$(mktemp)"
+			set +e
+			set +o pipefail
+			if command -v xcpretty >/dev/null 2>&1; then
+				xcodebuild test -project ReceptAppiOS.xcodeproj -scheme ReceptAppiOS -destination "$DESTINATION" 2>&1 | tee "$LOG_FILE" | xcpretty
+				STATUS=${PIPESTATUS[0]}
+			else
+				xcodebuild test -project ReceptAppiOS.xcodeproj -scheme ReceptAppiOS -destination "$DESTINATION" 2>&1 | tee "$LOG_FILE"
+				STATUS=${PIPESTATUS[0]}
+			fi
+			set -o pipefail
+			set -e
+
+			if [[ $STATUS -ne 0 ]]; then
+				if grep -q "Scheme ReceptAppiOS is not currently configured for the test action" "$LOG_FILE"; then
+					echo "==> No iOS tests configured for scheme; running build instead"
+					if command -v xcpretty >/dev/null 2>&1; then
+						xcodebuild build -project ReceptAppiOS.xcodeproj -scheme ReceptAppiOS -destination "$DESTINATION" | xcpretty
+					else
+						xcodebuild build -project ReceptAppiOS.xcodeproj -scheme ReceptAppiOS -destination "$DESTINATION"
+					fi
+				else
+					rm -f "$LOG_FILE"
+					exit $STATUS
+				fi
+			fi
+			rm -f "$LOG_FILE"
 	)
 else
 	echo "==> Skipping iOS unit tests (requires macOS + xcodebuild + xcodegen)"

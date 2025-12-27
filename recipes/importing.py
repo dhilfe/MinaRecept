@@ -127,7 +127,15 @@ def fetch_html(url: str, timeout: int = 10) -> tuple[str, bytes]:
 def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
     soup = BeautifulSoup(content, 'html.parser')
 
-    title = soup.title.string.strip() if soup.title and soup.title.string else ''
+    def clean_title(raw_title: str) -> str:
+        t = (raw_title or '').strip()
+        if not t:
+            return ''
+        if '|' in t:
+            t = t.split('|', 1)[0].strip()
+        return t
+
+    title = clean_title(soup.title.string) if soup.title and soup.title.string else ''
     description = ''
     ingredients: list[str] = []
     steps: list[str] = []
@@ -137,7 +145,7 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
 
     recipe_data = extract_json_ld(soup)
     if recipe_data:
-        title = str(recipe_data.get('name') or title).strip()
+        title = clean_title(str(recipe_data.get('name') or title))
         description = str(recipe_data.get('description') or '').strip()
 
         raw_ingredients = recipe_data.get('recipeIngredient', [])
@@ -184,7 +192,7 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
 
         og_title = soup.find('meta', property='og:title')
         if og_title:
-            ogt = og_title.get('content', '')
+            ogt = clean_title(og_title.get('content', ''))
             if not title or title.lower() in ['instagram', 'facebook', 'log in']:
                 title = ogt
                 if ' on Instagram: "' in title:
@@ -199,15 +207,15 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
             paragraphs = [p.get_text().strip() for p in soup.find_all('p') if len(p.get_text().strip()) > 30]
             description = '\n\n'.join(paragraphs[:3])
 
-    title = (title or '').strip()
+    title = clean_title(title)
     if not title:
         title = 'Importerad länk'
 
     description = (description or '').strip()
     if description:
-        description = f"{description[:1000]}\n\n(Importerad från: {url})"
+        description = f"{description[:1000]}"
     else:
-        description = f"(Importerad från: {url})"
+        description = ""
 
     if cooking_time <= 0:
         cooking_time = 30

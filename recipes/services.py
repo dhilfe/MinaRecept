@@ -2,6 +2,42 @@ import json
 import re
 from .models import ShoppingListItem, ShoppingListRecipeSource
 
+def clean_ingredient_name(name: str) -> str:
+    if not name:
+        return name
+    
+    # Remove parentheses and commas
+    name = name.replace('(', '').replace(')', '').replace(',', '')
+    
+    # Remove specific phrases
+    phrases_to_remove = [
+        r'\btill panering\b',
+        r'\btill servering\b',
+        r'\btill garnering\b',
+        r'\btill stekning\b',
+        r'\btill fritering\b',
+        r'\btill formen\b',
+        r'\btillbehör\b',
+        r'\batt steka i\b',
+        r'\batt steka med\b',
+        r'\batt pensla med\b',
+        r'\brumsvarmt\b',
+        r'\bsmält\b',
+        r'\bhyvlat\b',
+        r'\briven\b',
+        r'\bfinhackad\b',
+        r'\bgrovhackad\b',
+        r'\bskivad\b',
+        r'\btärnad\b',
+        r'\bkrossad\b',
+        r'\bpressad\b',
+    ]
+    
+    for phrase in phrases_to_remove:
+        name = re.sub(phrase, '', name, flags=re.IGNORECASE)
+        
+    return name.strip()
+
 def to_float(value: str):
     try:
         return float(str(value).strip().replace(',', '.'))
@@ -46,9 +82,9 @@ def parse_legacy_ingredient_line(line: str):
         amount = (m.group('amount') or '').strip()
         unit = (m.group('unit') or '').strip().strip('.')
         name = (m.group('name') or '').strip()
-        return name, amount, unit
+        return clean_ingredient_name(name), amount, unit
 
-    return text, '', ''
+    return clean_ingredient_name(text), '', ''
 
 def upsert_shopping_list_item(user, shopping_list, name, amount, unit, recipe=None):
     """
@@ -62,23 +98,50 @@ def upsert_shopping_list_item(user, shopping_list, name, amount, unit, recipe=No
     if not name:
         return None, False
 
-    # Try to find existing item
+    # 1. Try exact match (name + unit)
     existing = ShoppingListItem.objects.filter(
         user=user,
         shopping_list=shopping_list,
         checked=False,
         name__iexact=name,
         unit__iexact=unit,
-    ).first() if unit else ShoppingListItem.objects.filter(
-        user=user,
-        shopping_list=shopping_list,
-        checked=False,
-        name__iexact=name,
-        unit='',
     ).first()
 
+    # 2. If not found, try match by name only (to merge different units)
+    if not existing:
+        existing = ShoppingListItem.objects.filter(
+            user=user,
+            shopping_list=shopping_list,
+            checked=False,
+            name__iexact=name,
+        ).first()
+        
+        if existing:
+            # We found a match by name but unit differs.
+            # We need to merge them into a combined string.
+            
+            # Construct the string for the NEW item
+            new_part = f"{amount} {unit}".strip()
+            if not new_part:
+                new_part = "1" # Fallback if no amount/unit provided
+
+            # Construct the string for the EXISTING item
+            existing_part = f"{existing.amount} {existing.unit}".strip()
+            if not existing_part:
+                existing_part = "1"
+
+            # Combine them
+            existing.amount = f"{existing_part} + {new_part}"
+            existing.unit = "" # Clear unit as it is now part of amount string
+            
+            if recipe:
+                existing.recipe = recipe
+            
+            existing.save(update_fields=['amount', 'unit', 'recipe', 'updated_at'] if recipe else ['amount', 'unit', 'updated_at'])
+            return existing, False
+
     if existing:
-        # Merge logic
+        # Exact match found (same unit), use existing merge logic
         if amount:
             a1 = to_float(existing.amount)
             a2 = to_float(amount)
@@ -120,16 +183,33 @@ def upsert_shopping_list_item(user, shopping_list, name, amount, unit, recipe=No
         )
         return item, True
 
-def add_ingredients_to_list(user, recipe, shopping_list):
+def add_ingredients_to_list(user, recipe, shopping_list, target_servings=None, force=False):
     """
     Adds ingredients from a recipe to a shopping list.
     Returns a dict with 'added' (int), 'merged' (int), and 'already_exists' (bool).
     """
-    if ShoppingListRecipeSource.objects.filter(user=user, shopping_list=shopping_list, recipe=recipe).exists():
+    # If we are scaling, we might want to allow adding even if source exists?
+    # For now, keep the check to avoid duplicates if adding the exact same recipe.
+    if not force and ShoppingListRecipeSource.objects.filter(user=user, shopping_list=shopping_list, recipe=recipe).exists():
         return {'added': 0, 'merged': 0, 'already_exists': True}
 
     added = 0
     merged = 0
+    
+    scale_factor = 1.0
+    if target_servings and recipe.servings:
+        try:
+            scale_factor = float(target_servings) / float(recipe.servings)
+        except (ValueError, ZeroDivisionError):
+            scale_factor = 1.0
+
+    def scale_amount(amt_str):
+        if scale_factor == 1.0:
+            return amt_str
+        val = to_float(amt_str)
+        if val is not None:
+            return format_amount(val * scale_factor)
+        return amt_str
 
     # Try JSON ingredients first
     ingredients = None
@@ -147,10 +227,15 @@ def add_ingredients_to_list(user, recipe, shopping_list):
             name = str(ing.get('name') or '').strip()
             amount = str(ing.get('amount') or '').strip()
             unit = str(ing.get('unit') or '').strip()
+
+            name = clean_ingredient_name(name)
+
             if name.endswith(':') and not amount and not unit:
                 continue
             if not name:
                 continue
+            
+            amount = scale_amount(amount)
 
             _, created = upsert_shopping_list_item(user, shopping_list, name, amount, unit, recipe)
             if created:
@@ -164,6 +249,7 @@ def add_ingredients_to_list(user, recipe, shopping_list):
             if not parsed:
                 continue
             name, amount, unit = parsed
+            amount = scale_amount(amount)
             _, created = upsert_shopping_list_item(user, shopping_list, name, amount, unit, recipe)
             if created:
                 added += 1
@@ -171,6 +257,6 @@ def add_ingredients_to_list(user, recipe, shopping_list):
                 merged += 1
 
     if added or merged:
-        ShoppingListRecipeSource.objects.create(user=user, shopping_list=shopping_list, recipe=recipe)
+        ShoppingListRecipeSource.objects.get_or_create(user=user, shopping_list=shopping_list, recipe=recipe)
     
     return {'added': added, 'merged': merged, 'already_exists': False}

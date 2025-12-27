@@ -9,9 +9,12 @@ class Recipe(models.Model):
     ]
     
     TYPE_CHOICES = [
-        ('everyday', 'Vardagsmat'),
-        ('party', 'Fest'),
+        ('breakfast', 'Frukost'),
+        ('lunch_dinner', 'Lunch/Middag'),
+        ('appetizer', 'Förrätt'),
         ('dessert', 'Efterrätt'),
+        ('snack', 'Mellanmål'),
+        ('party', 'Fest'),
         ('vegetarian', 'Vegetariskt'),
         ('other', 'Övrigt'),
     ]
@@ -23,7 +26,7 @@ class Recipe(models.Model):
     steps = models.TextField(help_text="Beskriv tillagningsstegen", verbose_name="Gör så här")
     cooking_time = models.PositiveIntegerField(help_text="Tid i minuter", verbose_name="Tillagningstid")
     difficulty = models.CharField(max_length=10, choices=DIFFICULTY_CHOICES, default='medium', verbose_name="Svårighetsgrad")
-    dish_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='everyday', verbose_name="Typ av rätt")
+    dish_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='lunch_dinner', verbose_name="Typ av rätt")
     tags = models.CharField(max_length=200, blank=True, help_text="Kommaseparerade taggar", verbose_name="Taggar")
     servings = models.PositiveIntegerField(default=4, verbose_name="Antal portioner")
     image = models.ImageField(upload_to='recipes/', blank=True, null=True, verbose_name="Bild")
@@ -53,6 +56,7 @@ class WeeklyPlan(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name="Användare")
     day = models.CharField(max_length=3, choices=DAYS_OF_WEEK, verbose_name="Dag")
     recipe = models.ForeignKey(Recipe, on_delete=models.CASCADE, verbose_name="Recept")
+    servings = models.PositiveIntegerField(default=4, verbose_name="Antal portioner")
 
     class Meta:
         unique_together = ('user', 'day', 'recipe')
@@ -68,6 +72,7 @@ class WeeklyMenu(models.Model):
     name = models.CharField(max_length=120, verbose_name="Namn")
     week_number = models.PositiveSmallIntegerField(null=True, blank=True, verbose_name="Veckonummer")
     year = models.PositiveSmallIntegerField(null=True, blank=True, verbose_name="År")
+    servings = models.PositiveIntegerField(default=4, verbose_name="Antal portioner")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Skapad")
 
     class Meta:

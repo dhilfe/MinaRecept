@@ -14,11 +14,50 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: se.receptapp.ios
+        CODE_SIGN_ENTITLEMENTS: ReceptAppiOS/ReceptAppiOS.entitlements
         INFOPLIST_KEY_CFBundleDisplayName: ReceptApp
-        INFOPLIST_KEY_API_BASE_URL: http://localhost:8000/api/
+        INFOPLIST_KEY_API_BASE_URL: http://127.0.0.1:8000/api/
+      configs:
+        Debug:
+          CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: YES
     info:
       path: ReceptAppiOS/Resources/Info.plist
       properties:
+        API_BASE_URL: $(INFOPLIST_KEY_API_BASE_URL)
+        CFBundleURLTypes:
+          - CFBundleURLName: se.receptapp.ios
+            CFBundleURLSchemes:
+              - receptapp
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            localhost:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+            127.0.0.1:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+    dependencies:
+      - target: ReceptAppShare
+
+  ReceptAppShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ReceptAppShare
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: NO
+        PRODUCT_BUNDLE_IDENTIFIER: se.receptapp.ios.share
+        CODE_SIGN_ENTITLEMENTS: ReceptAppShare/ReceptAppShare.entitlements
+        INFOPLIST_KEY_CFBundleDisplayName: ReceptApp Share
+        INFOPLIST_KEY_API_BASE_URL: http://127.0.0.1:8000/api/
+      configs:
+        Debug:
+          CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: YES
+    info:
+      path: ReceptAppShare/Info.plist
+      properties:
+        CFBundleDisplayName: ReceptApp Share
         API_BASE_URL: $(INFOPLIST_KEY_API_BASE_URL)
         NSAppTransportSecurity:
           NSExceptionDomains:
@@ -28,3 +67,9 @@ targets:
             127.0.0.1:
               NSExceptionAllowsInsecureHTTPLoads: true
               NSIncludesSubdomains: true
+        NSExtension:
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController

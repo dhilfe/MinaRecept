@@ -6,33 +6,68 @@ struct ShoppingListsView: View {
     @State private var lists: [ShoppingListDTO] = []
     @State private var isLoading: Bool = false
     @State private var errorMessage: String? = nil
+    @State private var showCreateAlert: Bool = false
+    @State private var newListName: String = ""
 
     var body: some View {
         NavigationStack {
-            List(lists) { list in
-                NavigationLink(value: list) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(list.name)
-                                .font(.headline)
+            List {
+                ForEach(lists) { list in
+                    NavigationLink(value: list) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(list.name)
+                                    .font(.headline)
 
-                            if list.isRecurring {
-                                Text("Återkommande")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                if let count = list.itemCount {
+                                    Text("\(count) varor")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                if let date = list.updatedAt {
+                                    Text(date.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                if list.isRecurring {
+                                    Text("Återkommande")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
+                            Spacer()
                         }
-                        Spacer()
                     }
                 }
+                .onDelete(perform: deleteList)
             }
             .navigationTitle("Inköpslistor")
             .navigationDestination(for: ShoppingListDTO.self) { list in
                 ShoppingListDetailView(list: list)
             }
+            .alert("Ny stående lista", isPresented: $showCreateAlert) {
+                TextField("Namn", text: $newListName)
+                Button("Avbryt", role: .cancel) { }
+                Button("Skapa") {
+                    createList()
+                }
+            } message: {
+                Text("Ange namn för den nya stående inköpslistan.")
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Logga ut") { session.logout() }
+                    HStack {
+                        Button {
+                            newListName = ""
+                            showCreateAlert = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        
+                        Button("Logga ut") { session.logout() }
+                    }
                 }
 
                 if isLoading {
@@ -58,6 +93,19 @@ struct ShoppingListsView: View {
         }
     }
 
+    private func createList() {
+        guard let token = session.token, !newListName.isEmpty else { return }
+        
+        Task {
+            do {
+                _ = try await APIClient.shared.createShoppingList(name: newListName, isRecurring: true, token: token)
+                await load()
+            } catch {
+                errorMessage = APIError.userFacingMessage(for: error)
+            }
+        }
+    }
+
     private func load() async {
         guard let token = session.token else { return }
         isLoading = true
@@ -68,6 +116,22 @@ struct ShoppingListsView: View {
             lists = try await APIClient.shared.fetchShoppingLists(token: token)
         } catch {
             errorMessage = APIError.userFacingMessage(for: error)
+        }
+    }
+
+    private func deleteList(at offsets: IndexSet) {
+        guard let token = session.token else { return }
+        
+        for index in offsets {
+            let list = lists[index]
+            Task {
+                do {
+                    try await APIClient.shared.deleteShoppingList(id: list.id, token: token)
+                    await load()
+                } catch {
+                    errorMessage = APIError.userFacingMessage(for: error)
+                }
+            }
         }
     }
 }

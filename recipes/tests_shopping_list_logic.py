@@ -98,3 +98,27 @@ class ShoppingListLogicTests(TestCase):
         item = ShoppingListItem.objects.get(shopping_list=main_list, name="Salt")
         # Expecting concatenation: "Lite + Mer"
         self.assertEqual(item.amount, "Lite + Mer")
+
+    def test_ingredient_cleaning(self):
+        """Test that ingredients are cleaned (parentheses, commas, 'till panering') when added."""
+        main_list = ShoppingList.objects.create(user=self.user, name="Main List", is_main=True)
+        recipe = Recipe.objects.create(
+            user=self.user,
+            title='Cleaning Recipe',
+            ingredients='1 st ägg (stora), till panering\n2 dl mjöl, till servering',
+            steps='Step 1',
+            cooking_time=10,
+            servings=2
+        )
+        
+        url = reverse('recipe-add-to-shopping-list', args=[recipe.pk])
+        self.client.post(url)
+        
+        items = ShoppingListItem.objects.filter(shopping_list=main_list)
+        names = sorted([item.name for item in items])
+        
+        # "1 st ägg (stora), till panering" -> "ägg stora"
+        # "2 dl mjöl, till servering" -> "mjöl"
+        
+        self.assertIn("ägg stora", names) 
+        self.assertIn("mjöl", names)

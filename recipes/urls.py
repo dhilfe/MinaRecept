@@ -11,6 +11,7 @@ urlpatterns = [
     path('recipe/<int:pk>/cook/', views.RecipeCookView.as_view(), name='recipe_cook'),
     path('recipe/new/', views.RecipeCreateView.as_view(), name='recipe_create'),
     path('recipe/import/', views.recipe_import, name='recipe_import'),
+    path('recipe/import-image/', views.recipe_import_image, name='recipe_import_image'),
     path('recipe/bookmarklet/', views.bookmarklet_view, name='bookmarklet_info'),
     path('recipe/<int:pk>/edit/', views.RecipeUpdateView.as_view(), name='recipe_update'),
     path('recipe/<int:pk>/delete/', views.RecipeDeleteView.as_view(), name='recipe_delete'),
@@ -29,5 +30,6 @@ urlpatterns = [
     path('weekly-plan/update/', views.update_menu_day, name='update_menu_day'),
     path('weekly-plan/remove/<int:pk>/', views.remove_from_menu, name='remove_from_menu'),
     path('weekly-plan/random/', views.generate_random_menu, name='generate_random_menu'),
+    path('weekly-plan/add-to-shopping-list/', views.add_weekly_menu_to_shopping_list, name='add_weekly_menu_to_shopping_list'),
     path('weekly-plan/clear/', views.clear_menu, name='clear_menu'),
 ]
