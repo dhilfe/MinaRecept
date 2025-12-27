@@ -1,4 +1,5 @@
 from django.test import TestCase, Client
+from django.contrib.messages import get_messages
 from django.contrib.auth.models import User
 from django.urls import reverse
 from .models import Recipe, WeeklyPlan, WeeklyMenu, ShoppingList, ShoppingListItem
@@ -7,6 +8,7 @@ import requests
 from datetime import date, timedelta
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
+from pathlib import Path
 
 class RecipeTests(TestCase):
     def setUp(self):
@@ -24,7 +26,7 @@ class RecipeTests(TestCase):
             steps='Step 1\nStep 2',
             cooking_time=30,
             difficulty='easy',
-            dish_type='everyday',
+            dish_type='lunch_dinner',
             servings=4
         )
 
@@ -51,6 +53,15 @@ class RecipeTests(TestCase):
         response = self.client.get(reverse('recipe_cook', args=[self.recipe.pk]))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Test Recipe')
+
+    def test_recipe_detail_has_add_to_shopping_list_button(self):
+        """Ensure the 'Add to shopping list' button is present on the recipe detail page."""
+        response = self.client.get(reverse('recipe_detail', args=[self.recipe.pk]))
+        self.assertEqual(response.status_code, 200)
+        # Check for the link to choose_shopping_list_for_recipe
+        expected_url = reverse('choose_shopping_list_for_recipe', args=[self.recipe.pk])
+        self.assertContains(response, expected_url)
+        self.assertContains(response, 'Lägg till i inköpslista')
 
     def test_add_ingredients_to_shopping_list(self):
         response = self.client.post(
@@ -168,20 +179,36 @@ class RecipeTests(TestCase):
                 user=self.user,
                 title=f'Recipe {i}',
                 cooking_time=10,
-                servings=2
+                servings=2,
+                dish_type='lunch_dinner'
             )
             
-        response = self.client.post(reverse('generate_random_menu'))
+        response = self.client.post(reverse('generate_random_menu'), {'servings': 4})
         self.assertEqual(response.status_code, 302)
         self.assertEqual(WeeklyPlan.objects.filter(user=self.user).count(), 7)
+
+    def test_random_menu_no_dinners(self):
+        # Ensure we truly have no lunch/dinner recipes for the default filter.
+        Recipe.objects.filter(user=self.user).delete()
+
+        # Create recipes but no dinners
+        Recipe.objects.create(user=self.user, title='Breakfast', dish_type='breakfast', cooking_time=10)
+        
+        response = self.client.post(reverse('generate_random_menu'), {'servings': 4}, follow=True)
+        self.assertEqual(response.status_code, 200)
+        # Should redirect back to weekly plan with error
+        messages = list(get_messages(response.wsgi_request))
+        self.assertTrue(any("Inga lunch-/middagsrecept hittades" in str(m) for m in messages))
+        self.assertEqual(WeeklyPlan.objects.filter(user=self.user).count(), 0)
 
     def test_random_menu_with_filters(self):
         # Create recipes with different types
         Recipe.objects.create(user=self.user, title='Veg', dish_type='vegetarian', cooking_time=20)
-        Recipe.objects.create(user=self.user, title='Meat', dish_type='everyday', cooking_time=40)
+        Recipe.objects.create(user=self.user, title='Meat', dish_type='lunch_dinner', cooking_time=40)
         
         # Filter for vegetarian
         response = self.client.post(reverse('generate_random_menu'), {
+            'servings': 4,
             'include_types': ['vegetarian']
         })
         self.assertEqual(response.status_code, 302)
@@ -196,7 +223,7 @@ class RecipeTests(TestCase):
         response = self.client.post(reverse('save_weekly_menu'), {'menu_name': 'Julvecka'})
         self.assertEqual(response.status_code, 302)
         menu = WeeklyMenu.objects.get(user=self.user)
-        self.assertEqual(menu.name, 'Julvecka')
+        self.assertEqual(menu.name, 'Julvecka (4p)')
         self.assertEqual(menu.items.count(), 1)
 
     def test_save_weekly_menu_default_next_week_number(self):
@@ -209,7 +236,7 @@ class RecipeTests(TestCase):
         expected_week = int(iso.week)
         expected_year = int(iso.year)
 
-        self.assertEqual(menu.name, f"Vecka {expected_week}")
+        self.assertEqual(menu.name, f"Vecka {expected_week} (4p)")
         self.assertEqual(menu.week_number, expected_week)
         self.assertEqual(menu.year, expected_year)
 
@@ -295,7 +322,7 @@ class RecipeTests(TestCase):
         self.assertEqual(data['steps'], '')       # Should be empty now
         
         # Description should be clean
-        self.assertIn('(Importerad från Instagram: https://instagram.com/p/123)', data['description'])
+        self.assertFalse('(Importerad från' in (data.get('description') or ''))
         
         # Raw text should be in imported_text
         self.assertIn('My Insta Recipe\n\nIngredients:\n- 1 egg\n\nSteps:\n1. Cook it.', data['imported_text'])
@@ -334,6 +361,98 @@ class RecipeTests(TestCase):
         # Image URL should be passed through for optional download/save
         self.assertEqual(data.get('imported_image_url'), 'http://example.com/image.jpg')
 
+    @patch('recipes.views.requests.get')
+    def test_import_recipe_timeout_shows_user_friendly_error(self, mock_get):
+        mock_get.side_effect = requests.Timeout("timeout")
+
+        response = self.client.post(reverse('recipe_import'), {
+            'url': 'https://example.com/recipe'
+        })
+
+        self.assertEqual(response.status_code, 200)
+        msgs = [m.message for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any('Tidsgränsen' in m for m in msgs))
+
+    @patch('recipes.views.requests.get')
+    def test_import_recipe_http_error_shows_status_code(self, mock_get):
+        mock_response = MagicMock()
+        http_err = requests.HTTPError("404")
+        http_err.response = MagicMock(status_code=404)
+        mock_response.raise_for_status.side_effect = http_err
+        mock_get.return_value = mock_response
+
+        response = self.client.post(reverse('recipe_import'), {
+            'url': 'https://example.com/recipe'
+        })
+
+        self.assertEqual(response.status_code, 200)
+        msgs = [m.message for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any('HTTP 404' in m for m in msgs))
+
+    def _load_import_fixture(self, filename: str) -> bytes:
+        base = Path(__file__).resolve().parent / 'test_fixtures' / 'import'
+        return (base / filename).read_bytes()
+
+    @patch('recipes.views.requests.get')
+    def test_import_recipe_fixture_landleyskok(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.content = self._load_import_fixture('landleyskok.se.html')
+        mock_get.return_value = mock_response
+
+        response = self.client.post(reverse('recipe_import'), {'url': 'https://landleyskok.se/recept/test'})
+        self.assertEqual(response.status_code, 302)
+        data = self.client.session['import_data']
+        self.assertEqual(data['title'], 'Landleyskok Fixture Recipe')
+        self.assertIn('1 dl mjöl', data['ingredients'])
+        self.assertIn('Blanda torra ingredienser.', data['steps'])
+        self.assertIn('Vispa ner ägg.', data['steps'])
+
+    @patch('recipes.views.requests.get')
+    def test_import_recipe_fixture_ica(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.content = self._load_import_fixture('ica.se.html')
+        mock_get.return_value = mock_response
+
+        response = self.client.post(reverse('recipe_import'), {'url': 'https://ica.se/recept/test'})
+        self.assertEqual(response.status_code, 302)
+        data = self.client.session['import_data']
+        self.assertEqual(data['title'], 'ICA Fixture Recipe')
+        self.assertIn('3 msk olja', data['ingredients'])
+        self.assertIn('Värm oljan.', data['steps'])
+
+    @patch('recipes.views.requests.get')
+    def test_import_recipe_fixture_coop(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.content = self._load_import_fixture('coop.se.html')
+        mock_get.return_value = mock_response
+
+        response = self.client.post(reverse('recipe_import'), {'url': 'https://coop.se/recept/test'})
+        self.assertEqual(response.status_code, 302)
+        data = self.client.session['import_data']
+        self.assertEqual(data['title'], 'Coop Fixture Recipe')
+        self.assertIn('1 st lök', data['ingredients'])
+        self.assertIn('Hacka lök.', data['steps'])
+        self.assertIn('Fräs i panna.', data['steps'])
+        self.assertIn('Servera.', data['steps'])
+
+    @patch('recipes.views.requests.get')
+    def test_import_recipe_fixture_koket(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.content = self._load_import_fixture('koket.se.html')
+        mock_get.return_value = mock_response
+
+        response = self.client.post(reverse('recipe_import'), {'url': 'https://koket.se/recept/test'})
+        self.assertEqual(response.status_code, 302)
+        data = self.client.session['import_data']
+        self.assertEqual(data['title'], 'Köket Fixture Recipe')
+        self.assertIn('200 g pasta', data['ingredients'])
+        self.assertIn('Koka pastan.', data['steps'])
+        self.assertIn('Häll av och blanda.', data['steps'])
+
 
 class ApiTests(TestCase):
     def setUp(self):
@@ -358,6 +477,51 @@ class ApiTests(TestCase):
         )
 
         self.client_api = APIClient()
+
+        self.token1 = Token.objects.create(user=self.user1)
+
+    def _auth1(self):
+        self.client_api.credentials(HTTP_AUTHORIZATION=f'Token {self.token1.key}')
+
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_creates_recipe_from_fixture(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        fixture_path = Path(__file__).resolve().parent / 'test_fixtures' / 'import' / 'ica.se.html'
+        mock_response.content = fixture_path.read_bytes()
+        mock_get.return_value = mock_response
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {'url': 'https://ica.se/recept/test', 'dish_type': 'dessert'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['title'], 'ICA Fixture Recipe')
+
+        # Ensure it belongs to user1
+        recipe_id = response.data['id']
+        created = Recipe.objects.get(id=recipe_id)
+        self.assertEqual(created.user_id, self.user1.id)
+        self.assertEqual(created.dish_type, 'dessert')
+        self.assertIn('Värm oljan.', created.steps)
+
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_rejects_invalid_dish_type(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        fixture_path = Path(__file__).resolve().parent / 'test_fixtures' / 'import' / 'ica.se.html'
+        mock_response.content = fixture_path.read_bytes()
+        mock_get.return_value = mock_response
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {'url': 'https://ica.se/recept/test', 'dish_type': 'not-a-type'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_api_token_obtain(self):
         response = self.client_api.post(

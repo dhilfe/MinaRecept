@@ -1,0 +1,73 @@
+{% extends 'recipes/base.html' %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card mt-4">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">Fota recept</h4>
+            </div>
+            <div class="card-body">
+                <p class="lead">Ladda upp en bild på ett recept (från en kokbok, tidning eller skärmdump) så försöker vi tolka texten automatiskt.</p>
+                
+                <form method="post" enctype="multipart/form-data" id="uploadForm">
+                    {% csrf_token %}
+                    
+                    <div class="mb-4 text-center">
+                        <div class="mb-3">
+                            <label for="recipe_image" class="form-label d-block fw-bold">Välj bild eller ta foto</label>
+                            <input type="file" class="form-control" id="recipe_image" name="recipe_image" accept="image/*" capture="environment" required>
+                        </div>
+                        
+                        <div id="imagePreview" class="mt-3 d-none">
+                            <img src="" alt="Förhandsvisning" class="img-fluid rounded shadow-sm" style="max-height: 400px;">
+                        </div>
+                    </div>
+
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-success btn-lg" id="submitBtn">
+                            <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true" id="loadingSpinner"></span>
+                            <span id="btnText">Analysera bild</span>
+                        </button>
+                        <a href="{% url 'recipe_create' %}" class="btn btn-outline-secondary">Avbryt</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <div class="alert alert-info mt-3">
+            <i class="bi bi-info-circle"></i> <strong>Tips:</strong> Se till att bilden är skarp och har bra ljus. Försök få med hela receptet (titel, ingredienser och instruktioner) i bilden.
+        </div>
+    </div>
+</div>
+
+<script>
+    const fileInput = document.getElementById('recipe_image');
+    const previewDiv = document.getElementById('imagePreview');
+    const previewImg = previewDiv.querySelector('img');
+    const form = document.getElementById('uploadForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const loadingSpinner = document.getElementById('loadingSpinner');
+    const btnText = document.getElementById('btnText');
+
+    fileInput.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                previewImg.src = e.target.result;
+                previewDiv.classList.remove('d-none');
+            }
+            reader.readAsDataURL(file);
+        } else {
+            previewDiv.classList.add('d-none');
+        }
+    });
+
+    form.addEventListener('submit', function() {
+        submitBtn.disabled = true;
+        loadingSpinner.classList.remove('d-none');
+        btnText.textContent = 'Analyserar... (detta kan ta några sekunder)';
+    });
+</script>
+{% endblock %}

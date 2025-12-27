@@ -7,6 +7,7 @@ struct RecipeDTO: Codable, Identifiable, Hashable {
     let ingredients: String?
     let steps: String?
     let imageURL: URL?
+    let dishType: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -15,7 +16,43 @@ struct RecipeDTO: Codable, Identifiable, Hashable {
         case ingredients
         case steps
         case imageURL = "image_url"
+        case dishType = "dish_type"
     }
+    
+    var dishTypeDisplayName: String {
+        switch dishType {
+        case "breakfast": return "Frukost"
+        case "lunch", "dinner", "lunch_dinner": return "Lunch/Middag"
+        case "appetizer": return "Förrätt"
+        case "dessert": return "Efterrätt"
+        case "snack": return "Mellanmål"
+        case "everyday": return "Lunch/Middag"
+        case "party": return "Fest"
+        case "vegetarian": return "Vegetariskt"
+        case "other": return "Övrigt"
+        default: return dishType ?? ""
+        }
+    }
+
+    var preferredImageURL: URL? {
+        guard let imageURL else { return nil }
+        guard imageURL.scheme?.lowercased() == "http" else { return imageURL }
+
+        var components = URLComponents(url: imageURL, resolvingAgainstBaseURL: false)
+        components?.scheme = "https"
+        return components?.url ?? imageURL
+    }
+
+    static let allDishTypes: [(id: String, name: String)] = [
+        ("breakfast", "Frukost"),
+        ("lunch_dinner", "Lunch/Middag"),
+        ("appetizer", "Förrätt"),
+        ("dessert", "Efterrätt"),
+        ("snack", "Mellanmål"),
+        ("party", "Fest"),
+        ("vegetarian", "Vegetariskt"),
+        ("other", "Övrigt")
+    ]
 }
 
 struct IngredientDTO: Codable, Identifiable {

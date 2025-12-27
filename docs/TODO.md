@@ -45,6 +45,16 @@
     - [ ] Slå på Branch protection för `stage`
     - [ ] Kräv GitHub Actions-status (CI) för merge till `stage`
     - [ ] (Valfritt) Blockera direkt-push till `stage` och kräv PR
+    - [x] CI: kör backend + E2E på `stage` (GitHub Actions)
+    - [x] CI: kör iOS XCTest på macOS (FR-20251225-03)
+
+- [x] **iOS Share Extension (One-click save)**
+    - [x] Backend API för import
+    - [x] iOS Share Extension target
+    - [x] Hantera delade URL:er
+    - [x] Deep linking till huvudappen
+
+
 
 - [ ] **Robust Recept-import från URL**
     - [x] Hämta HTML från URL
@@ -52,11 +62,12 @@
     - [x] Hantera URLer utan `http://` eller `https://`
     - [x] Hantera URLer som kräver `www.` (automatisk retry)
     - [x] Parsa ISO-format för tid (t.ex. PT1H30M)
-    - [ ] **TEST:** Verifiera import från `landleyskok.se` (Användare)
-    - [ ] **TEST:** Verifiera import från `ica.se`
-    - [ ] **TEST:** Verifiera import från `coop.se`
-    - [ ] **TEST:** Verifiera import från `koket.se`
-    - [ ] Felhantering: Tydligt felmeddelande om sidan inte går att läsa
+    - [x] **TEST:** Verifiera import från `landleyskok.se` (fixtures)
+    - [x] **TEST:** Verifiera import från `ica.se` (fixtures)
+    - [x] **TEST:** Verifiera import från `coop.se` (fixtures)
+    - [x] **TEST:** Verifiera import från `koket.se` (fixtures)
+    - [x] Felhantering: Tydligt felmeddelande om sidan inte går att läsa
+    - [x] FR-20251225-04: Import – fixtures/kompatibilitetstester för landleys/ica/coop/koket
     - [ ] **FRAMTIDA:** Förbättra text-parsning för Instagram/Sociala medier (Just nu sparas bara länk/bild/råtext)
     - [ ] **FRAMTIDA:** Bakgrundsvalidering av länkar (Kontrollera att sparade receptlänkar fortfarande fungerar, varna användaren om de är trasiga)
 
@@ -68,7 +79,7 @@
     - [ ] **TEST:** Kontrollera datumformat (svensk standard)
 
 - [ ] **UI/UX Polering**
-    - [ ] Förbättra layout för import-sidan (tydligare instruktioner)
+    - [x] Förbättra layout för import-sidan (tydligare instruktioner)
     - [ ] Bekräftelse vid borttagning av recept (Modal eller separat sida - *Finns separat sida nu*)
     - [ ] Responsivitetstest: Meny på mobil
 
@@ -103,7 +114,11 @@
     - [ ] Koppla socialt konto till befintligt konto
 
 - [ ] **Avancerad Import**
-    - [ ] OCR-tolkning av bilder (Fota recept)
+    - [ ] **FR-20251226-01: OCR-tolkning av bilder (Fota recept)**
+        - [x] UI för bilduppladdning
+        - [x] Backend-stöd för bildhantering
+        - [ ] Integration mot OCR/Vision-tjänst (OpenAI/Tesseract)
+        - [ ] **TEST:** Verifiera flödet med riktig OpenAI API-nyckel
     - [ ] Webbläsartillägg
 
 ## Fas 3: Anchovy-inspirerad UX (Fokus på matlagning)
@@ -121,7 +136,7 @@
     - [x] Detektera tidsangivelser i texten (t.ex. "koka i 10 min")
     - [x] Gör dem klickbara för att starta en nedräkning direkt i vyn
 
-- [ ] **FR-20251224-04: Understryk ingredienser i instruktioner**
+- [x] **FR-20251224-04: Understryk ingredienser i instruktioner**
     - [x] Understryk ingrediensnamn i "Gör så här" (receptdetalj)
     - [x] Understryk ingrediensnamn i Cook Mode steg-text
     - [x] Lägg test som verifierar understrykning
@@ -133,17 +148,30 @@
 
 ## Fas 4: Mobilapp & Publicering
 
-- [ ] **FR-20251224-05: iOS-app (SwiftUI) MVP**
+- [x] **FR-20251224-05: iOS-app (SwiftUI) MVP**
     - [x] Skapa `ios/`-projekt (XcodeGen) och checka in `project.yml`
     - [x] Implementera login (token) + lagring (Keychain)
     - [x] Receptlista (GET `/api/recipes/`)
     - [x] Receptdetalj (GET `/api/recipes/{id}/`) inkl. ingredienser + steg
     - [x] Logout
 
-- [ ] **FR-20251225-01: iOS: Inköpslistor (tab)**
-    - [ ] Tab "Inköpslistor" med lista av inköpslistor
-    - [ ] Detaljvy som visar items per inköpslista
-    - [ ] Visa checked-status
+- [x] **FR-20251225-01: iOS: Inköpslistor (tab)**
+    - [x] Tab "Inköpslistor" med lista av inköpslistor
+    - [x] Detaljvy som visar items per inköpslista
+    - [x] Visa checked-status
+    - [x] Toggle checked-status och persistera via API (PATCH)
+
+- [ ] **iOS: Sätt production API URL (Release) (FR-20251225-02)**
+    - [ ] Bestäm riktig prod-domän/endpoint (ersätt placeholder)
+    - [ ] Uppdatera `ios/project.yml` (Release `INFOPLIST_KEY_API_BASE_URL`)
+    - [ ] Verifiera att Release-build startar och kan logga in mot prod
+
+- [ ] **iOS: Share Extension Auth (App Groups)**
+    - [ ] Konfigurera App Groups i Apple Developer Portal
+    - [ ] Uppdatera `project.yml` med App Group entitlements
+    - [ ] Dela Keychain/Token mellan huvudapp och extension
+    - [ ] Verifiera att Share Extension kan posta recept som inloggad användare
+
 
 - [ ] **Mobilapp (Flutter/React Native)**
     - [ ] Grundläggande vy för receptlista

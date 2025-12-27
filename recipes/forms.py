@@ -19,6 +19,11 @@ class RecipeForm(forms.ModelForm):
         }
 
 class MenuGenerationForm(forms.Form):
+    servings = forms.IntegerField(
+        initial=4,
+        label="Antal portioner",
+        widget=forms.NumberInput(attrs={'class': 'form-control'})
+    )
     max_cooking_time = forms.IntegerField(
         required=False, 
         label="Max tillagningstid (min)",

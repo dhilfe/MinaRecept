@@ -32,6 +32,7 @@ media/
 
 # iOS (Xcode / XcodeGen)
 DerivedData/
+ios/.derivedData/
 *.xcworkspace/
 *.xcodeproj/
 *.xcuserstate

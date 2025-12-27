@@ -30,7 +30,7 @@ class E2ERecipeFlowTests(LiveServerTestCase):
             cooking_time=10,
             servings=2,
             difficulty="easy",
-            dish_type="everyday",
+            dish_type="lunch_dinner",
         )
         self.shopping_list = ShoppingList.objects.create(user=self.user, name="E2E Lista", is_recurring=False)
 
