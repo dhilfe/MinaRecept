@@ -59,6 +59,12 @@ Det finns en iOS Share Extension som kan spara recept via backend-API. För att 
 - API-kontrakt: `docs/API.md`
 - Backlog: `docs/TODO.md`
 
+## Registrering (E-post + lösenord)
+
+Det finns en enkel registreringssida på `/signup/` som skapar en användare med e-post + lösenord.
+
+Notera: e-post sparas även som `username` för att fungera med Django’s standard-login.
+
 ## Vanliga kommandon
 
 - Skapa migrationer: `./venv/bin/python manage.py makemigrations`

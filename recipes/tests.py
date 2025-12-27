@@ -36,6 +36,22 @@ class RecipeTests(TestCase):
         self.assertContains(response, 'Test Recipe')
         self.assertContains(response, reverse('recipe_cook', args=[self.recipe.pk]) + '?reset=1')
 
+    def test_signup_creates_user_and_logs_in(self):
+        anon = Client()
+        response = anon.post(
+            reverse('signup'),
+            {
+                'email': 'newuser@example.com',
+                'password1': 'A-strong-password-123!',
+                'password2': 'A-strong-password-123!',
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(User.objects.filter(username='newuser@example.com').exists())
+        # After signup we should be authenticated and see the navbar text.
+        self.assertContains(response, 'Inloggad som')
+
     def test_recipe_detail_view(self):
         response = self.client.get(reverse('recipe_detail', args=[self.recipe.pk]))
         self.assertEqual(response.status_code, 200)

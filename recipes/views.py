@@ -1,4 +1,5 @@
 from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
@@ -6,7 +7,7 @@ from django.urls import reverse_lazy
 from django.db.models import Q
 from django.contrib import messages
 from .models import Recipe, WeeklyPlan, WeeklyMenu, WeeklyMenuItem, ShoppingList, ShoppingListItem, ShoppingListRecipeSource
-from .forms import RecipeForm, MenuGenerationForm
+from .forms import RecipeForm, MenuGenerationForm, EmailSignupForm
 from .services import add_ingredients_to_list, to_float, format_amount, upsert_shopping_list_item
 import random
 import requests
@@ -14,6 +15,29 @@ from bs4 import BeautifulSoup
 import json
 import re
 import instaloader
+
+
+def signup_view(request):
+    """Simple email+password signup.
+
+    This is intentionally minimal (no OAuth credentials required) and works with
+    the existing LoginView by using email as the username.
+    """
+
+    if request.user.is_authenticated:
+        return redirect('recipe_list')
+
+    if request.method == 'POST':
+        form = EmailSignupForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            login(request, user, backend='django.contrib.auth.backends.ModelBackend')
+            messages.success(request, 'Konto skapat. Du är nu inloggad.')
+            return redirect('recipe_list')
+    else:
+        form = EmailSignupForm()
+
+    return render(request, 'recipes/signup.html', {'form': form})
 
 
 @login_required

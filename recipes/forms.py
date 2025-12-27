@@ -1,4 +1,7 @@
 from django import forms
+from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from .models import Recipe
 
 class RecipeForm(forms.ModelForm):
@@ -41,3 +44,52 @@ class MenuGenerationForm(forms.Form):
         label="Exkludera typer",
         widget=forms.CheckboxSelectMultiple(attrs={'class': 'form-check-input'})
     )
+
+
+class EmailSignupForm(forms.Form):
+    """Minimal signup (email + password) without needing social/OAuth setup.
+
+    We keep Django's default User model and store email in both `User.email` and
+    `User.username` so the existing LoginView (username/password) continues to work.
+    """
+
+    email = forms.EmailField(
+        label='E-post',
+        widget=forms.EmailInput(attrs={'class': 'form-control', 'autocomplete': 'email'}),
+    )
+    password1 = forms.CharField(
+        label='Lösenord',
+        widget=forms.PasswordInput(attrs={'class': 'form-control', 'autocomplete': 'new-password'}),
+    )
+    password2 = forms.CharField(
+        label='Upprepa lösenord',
+        widget=forms.PasswordInput(attrs={'class': 'form-control', 'autocomplete': 'new-password'}),
+    )
+
+    def clean_email(self):
+        email = (self.cleaned_data.get('email') or '').strip().lower()
+        if not email:
+            raise ValidationError('E-post är obligatoriskt.')
+
+        # Enforce uniqueness at app level (default Django User does not require unique email).
+        if User.objects.filter(email__iexact=email).exists() or User.objects.filter(username__iexact=email).exists():
+            raise ValidationError('E-postadressen används redan.')
+        return email
+
+    def clean(self):
+        cleaned = super().clean()
+        password1 = cleaned.get('password1')
+        password2 = cleaned.get('password2')
+
+        if password1 and password2 and password1 != password2:
+            self.add_error('password2', 'Lösenorden matchar inte.')
+
+        if password1:
+            validate_password(password1)
+
+        return cleaned
+
+    def save(self) -> User:
+        email = self.cleaned_data['email']
+        password = self.cleaned_data['password1']
+        return User.objects.create_user(username=email, email=email, password=password)
