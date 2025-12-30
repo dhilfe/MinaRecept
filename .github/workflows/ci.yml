@@ -2,9 +2,14 @@ name: CI
 
 on:
   pull_request:
-    branches: ["stage"]
+    branches: ["stage", "main"]
   push:
-    branches: ["stage"]
+    branches: ["stage", "main"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
