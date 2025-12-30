@@ -154,7 +154,7 @@ class ShareViewController: SLComposeServiceViewController {
             return
         }
         request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
-        shareLogger.info("[DEBUG] Using shared token from App Group: \(token)")
+        shareLogger.info("[DEBUG] Using shared token from App Group: \(token, privacy: .private)")
         
         let body: [String: Any] = [
             "url": url.absoluteString,

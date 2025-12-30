@@ -30,7 +30,7 @@ RATELIMIT_ENABLE = "test" not in sys.argv
 
 # SECURITY WARNING: keep the secret key used in production secret!
 if DEBUG:
-    SECRET_KEY = 'django-insecure-d-wdou8y26x+uld7froxezkn9d#u*2rkfb&mgyna=^u9+%=zhl'
+    SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-d-wdou8y26x+uld7froxezkn9d#u*2rkfb&mgyna=^u9+%=zhl')
 else:
     SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
     if not SECRET_KEY:
@@ -156,8 +156,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'receptapp_project.wsgi.application'
 
-
-import dj_database_url
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
