@@ -30,6 +30,9 @@ media/
 # Test artifacts
 .playwright/
 
+# Local scratch / image dumps
+temp/
+
 # iOS (Xcode / XcodeGen)
 DerivedData/
 ios/.derivedData/

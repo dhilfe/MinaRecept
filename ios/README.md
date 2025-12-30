@@ -1,6 +1,6 @@
 # iOS-klient (SwiftUI) – MVP
 
-Den här mappen innehåller en minimal iOS-app som pratar med ReceptApps API.
+Den här mappen innehåller en minimal iOS-app som pratar med MinaRecepts API.
 
 ## Förutsättningar
 - Xcode (valfri modern version)

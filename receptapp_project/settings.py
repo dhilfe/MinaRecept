@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 import os
+import sys
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,18 +21,81 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
+# --- PRODUKTION: domän, säkerhet, CORS ---
+# Sätt DEBUG=False i produktion!
+DEBUG = os.getenv('DJANGO_DEBUG', 'True') == 'True'
+
+# Disable rate limiting during test runs to avoid cross-test flakiness.
+RATELIMIT_ENABLE = "test" not in sys.argv
+
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-d-wdou8y26x+uld7froxezkn9d#u*2rkfb&mgyna=^u9+%=zhl'
+if DEBUG:
+    SECRET_KEY = 'django-insecure-d-wdou8y26x+uld7froxezkn9d#u*2rkfb&mgyna=^u9+%=zhl'
+else:
+    SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
+    if not SECRET_KEY:
+        # Fallback only if absolutely necessary, but preferably fail hard in prod
+        # raise ValueError("DJANGO_SECRET_KEY must be set in production")
+        pass 
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
 
-# Allow local browser testing by default.
-# In production, set DJANGO_ALLOWED_HOSTS (comma-separated).
+# ALLOWED_HOSTS måste innehålla din prod-domän (och ev. IP för test)
+# Exempel: DJANGO_ALLOWED_HOSTS=api.receptapp.se,receptapp.se,127.0.0.1
 if DEBUG:
     ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 else:
     ALLOWED_HOSTS = [h.strip() for h in os.getenv('DJANGO_ALLOWED_HOSTS', '').split(',') if h.strip()]
+
+# CORS: endast tillåt iOS-appens domän i produktion
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+else:
+    CORS_ALLOWED_ORIGINS = [
+        'https://app.receptapp.se',  # Byt till din faktiska appdomän
+        'https://api.receptapp.se',
+    ]
+
+# HTTPS: Se till att servern körs bakom TLS (t.ex. via Nginx/Let’s Encrypt)
+# Django kan tvinga HTTPS-redirect:
+SECURE_SSL_REDIRECT = not DEBUG
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+
+
+# Loggning: logga ej känslig data i produktion
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[{levelname}] {asctime} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'django.security': {
+            'handlers': ['console'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+    },
+}
+
+# Anpassade felsidor (404/500)
+if not DEBUG:
+    # Templates finns i templates/404.html och templates/500.html
+    # Django använder dessa automatiskt i production
+    pass
 
 
 # Application definition
@@ -52,6 +116,13 @@ INSTALLED_APPS = [
 
     'recipes',
 
+    # Social login (Apple, Google, etc)
+    'django.contrib.sites',
+    'allauth',
+    'allauth.account',
+    'allauth.socialaccount',
+    'allauth.socialaccount.providers.apple',
+
 ]
 
 MIDDLEWARE = [
@@ -61,6 +132,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'allauth.account.middleware.AccountMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -85,15 +157,36 @@ TEMPLATES = [
 WSGI_APPLICATION = 'receptapp_project.wsgi.application'
 
 
+import dj_database_url
+
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+if DEBUG:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
     }
-}
+else:
+    # Production: PostgreSQL (via DATABASE_URL env var)
+    DATABASE_URL = os.getenv('DATABASE_URL')
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL must be set in production (e.g. postgres://user:pass@host:5432/dbname).")
+
+    try:
+        import dj_database_url  # type: ignore
+    except ImportError as e:
+        raise RuntimeError("Missing dependency: dj-database-url. Install it (pip install -r requirements.txt).") from e
+
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=DATABASE_URL,
+            conn_max_age=600,
+            ssl_require=True,
+        )
+    }
 
 
 # Password validation
@@ -131,6 +224,8 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
@@ -153,8 +248,46 @@ REST_FRAMEWORK = {
 
 # Allow unauthenticated access to the token endpoint (handled by DRF view permissions).
 
-# CORS: tighten for production; allow localhost in dev.
+# --- Social login / allauth config ---
+SITE_ID = 1
+
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+    'allauth.account.auth_backends.AuthenticationBackend',
+]
+
+ACCOUNT_EMAIL_REQUIRED = True
+ACCOUNT_USERNAME_REQUIRED = False
+ACCOUNT_AUTHENTICATION_METHOD = 'email'
+ACCOUNT_EMAIL_VERIFICATION = 'mandatory'  # Kräver e-postverifiering
+ACCOUNT_LOGIN_ATTEMPTS_LIMIT = 5
+ACCOUNT_LOGIN_ATTEMPTS_TIMEOUT = 600  # 10 min
+SOCIALACCOUNT_AUTO_SIGNUP = True
+
+# E-postinställningar för produktion (lägg in i miljövariabler)
 if DEBUG:
-    CORS_ALLOW_ALL_ORIGINS = True
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+    DEFAULT_FROM_EMAIL = 'webmaster@localhost'
+else:
+    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+    EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.example.com')
+    EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+    EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+    EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+    EMAIL_USE_TLS = True
+    DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@receptapp.se')
 
-
+SOCIALACCOUNT_PROVIDERS = {
+    'apple': {
+        # Apple Sign-In credentials (lägg in i miljövariabler eller secrets!)
+        # Skapa och ladda ner en private key (p8) i Apple Developer Portal.
+        # Sätt dessa i din miljö (t.ex. .env, GitHub Secrets, eller servern):
+        #   APPLE_CLIENT_ID, APPLE_TEAM_ID, APPLE_KEY, APPLE_SECRET
+        'APP': {
+            'client_id': os.getenv('APPLE_CLIENT_ID', ''),
+            'team_id': os.getenv('APPLE_TEAM_ID', ''),
+            'key': os.getenv('APPLE_KEY', ''),  # Key ID
+            'secret': os.getenv('APPLE_SECRET', ''),  # Private key (p8)
+        },
+    },
+}

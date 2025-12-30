@@ -23,6 +23,8 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('recipes.api_urls')),
     path('', include('recipes.urls')),
+    # Social login (Apple, Google, etc)
+    path('accounts/', include('allauth.urls')),
 ]
 
 if settings.DEBUG:

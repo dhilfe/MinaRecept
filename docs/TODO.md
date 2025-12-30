@@ -1,4 +1,10 @@
-# ReceptApp - Att göra
+# MinaRecept - Att göra
+
+- [x] **Välkomstsida vid första appstart**
+    - [x] Skapa en välkomstsida som visas första gången appen startas (text finns sparad, se bilder på telefonen).
+
+- [ ] **Kodkommentarer & Dokumentation**
+    - [ ] Gå igenom hela kodbasen och uppdatera med relevanta kommentarer där det finns behov (funktioner, klasser, svårtolkad logik, API-kontrakt etc).
 
 ## Fas 1: Grundläggande MVP (Klar & Testad)
 
@@ -54,9 +60,7 @@
     - [x] Hantera delade URL:er
     - [x] Deep linking till huvudappen
 
-
-
-- [ ] **Robust Recept-import från URL**
+- [x] **Robust Recept-import från URL**
     - [x] Hämta HTML från URL
     - [x] Extrahera data via JSON-LD (strukturerad data)
     - [x] Hantera URLer utan `http://` eller `https://`
@@ -75,17 +79,17 @@
     - [x] Översätta statiska texter i templates
     - [x] Översätta formulär-etiketter (Labels)
     - [x] Översätta modell-namn (Verbose names)
-    - [ ] **TEST:** Kontrollera att alla felmeddelanden (Django forms) är på svenska
-    - [ ] **TEST:** Kontrollera datumformat (svensk standard)
+    - [x] **TEST:** Kontrollera att alla felmeddelanden (Django forms) är på svenska
+    - [x] **TEST:** Kontrollera datumformat (svensk standard i iOS)
 
-- [ ] **UI/UX Polering**
+- [x] **UI/UX Polering**
     - [x] Förbättra layout för import-sidan (tydligare instruktioner)
-    - [ ] Bekräftelse vid borttagning av recept (Modal eller separat sida - *Finns separat sida nu*)
+    - [x] Bekräftelse vid borttagning av recept (Modal eller separat sida - *Finns separat sida nu*)
     - [ ] Responsivitetstest: Meny på mobil
 
 ## Fas 2: Externa Integrationer & Avancerade funktioner
 
-- [ ] **iOS-spår: förutsättningar för iOS-app (backend)**
+- [x] **iOS-spår: förutsättningar för iOS-app (backend)**
     - [x] Lägg till REST API-ramverk (DRF) + grundkonfiguration
     - [x] Token-auth för app (login → token)
     - [x] CORS-strategi för mobilapp (dev/prod)
@@ -108,10 +112,10 @@
     - [ ] Verifiera push-notiser/alarmljud-strategi för Android (framtida)
     - [ ] Dokumentera bygg/deploy-flöde för Android (framtida)
 
-- [ ] **Social Inloggning**
-    - [ ] Google Sign-In
-    - [ ] Apple Sign-In
-    - [ ] Koppla socialt konto till befintligt konto
+- [x] **Social Inloggning (Release-krav)**
+    - [x] Apple Sign-In (Backend & iOS)
+    - [ ] Google Sign-In (Framtida)
+    - [ ] Koppla socialt konto till befintligt konto (Framtida)
 
 - [ ] **Avancerad Import**
     - [ ] **FR-20251226-01: OCR-tolkning av bilder (Fota recept)**
@@ -161,23 +165,64 @@
     - [x] Visa checked-status
     - [x] Toggle checked-status och persistera via API (PATCH)
 
-- [ ] **iOS: Sätt production API URL (Release) (FR-20251225-02)**
-    - [ ] Bestäm riktig prod-domän/endpoint (ersätt placeholder)
-    - [ ] Uppdatera `ios/project.yml` (Release `INFOPLIST_KEY_API_BASE_URL`)
+- [x] **iOS: Sätt production API URL (Release) (FR-20251225-02)**
+    - [x] Bestäm riktig prod-domän/endpoint (ersätt placeholder)
+    - [x] Uppdatera `ios/project.yml` (Release `INFOPLIST_KEY_API_BASE_URL`)
     - [ ] Verifiera att Release-build startar och kan logga in mot prod
 
-- [ ] **iOS: Share Extension Auth (App Groups)**
+- [x] **iOS: Share Extension Auth (App Groups)**
     - [ ] Konfigurera App Groups i Apple Developer Portal
-    - [ ] Uppdatera `project.yml` med App Group entitlements
-    - [ ] Dela Keychain/Token mellan huvudapp och extension
+    - [x] Uppdatera `project.yml` med App Group entitlements
+    - [x] Dela Keychain/Token mellan huvudapp och extension (Token sparas till Shared UserDefaults)
     - [ ] Verifiera att Share Extension kan posta recept som inloggad användare
-
 
 - [ ] **Mobilapp (Flutter/React Native)**
     - [ ] Grundläggande vy för receptlista
     - [ ] Inloggning via API
 
 - [ ] **Publicering**
-    - [ ] Terms & Conditions (Användarvillkor) innan publik lansering
-    - [ ] App Store
-    - [ ] Google Play
+
+# --- App live checklist (sammanfattning, se docs/app_live_cheklist.md för detaljer) ---
+
+
+- [x] **Backend & produktion**
+    - [x] Välj och konfigurera produktionsdomän (settings förberett)
+    - [ ] Sätt upp hosting för Django-backend (VPS/PaaS)
+    - [x] DEBUG=False och korrekta ALLOWED_HOSTS i prod (settings.py uppdaterad)
+    - [ ] Sätt upp HTTPS (TLS-cert, t.ex. Let's Encrypt)
+    - [x] CORS: endast tillåt iOS-appens domän i prod (settings.py uppdaterad)
+    - [x] Loggning: logga ej lösenord/tokens (settings.py uppdaterad)
+    - [x] Standard-felsidor (404/500) (Templates finns)
+
+- [ ] **Integritet & villkor**
+    - [x] Publicera Privacy Policy (Integritetspolicy) på egen URL
+    - [x] Publicera Terms & Conditions (Användarvillkor) på egen URL
+    - [ ] Kontakt/support-sida eller e-post (ex. support@receptapp.se)
+
+- [ ] **iOS: Produktion & Share Extension**
+    - [x] Sätt production API URL i ios/project.yml (INFOPLIST_KEY_API_BASE_URL)
+    - [x] Sätt versionsnummer (1.0.0) i project.yml
+    - [ ] Bygg och testa Release mot prod-backend
+    - [ ] Konfigurera App Groups för huvudapp + Share Extension
+    - [x] Implementera delad auth/token mellan app och extension
+    - [ ] Testa Share Extension mot prod-backend
+
+- [x] **UX, lokalisering & polish**
+    - [x] Gå igenom alla felmeddelanden och bekräftelser (svenska/engelska)
+    - [x] Testa datum/tidsformat i appen (svensk stil: "tim", "min")
+    - [ ] Testa responsivitet på små och stora skärmar
+
+- [ ] **Testning inför App Store**
+    - [ ] Säkerställ att CI körs grönt på stage/main
+    - [ ] Lås in merges till stage med branch protection
+    - [ ] Testa end-to-end-flöden på fysisk iPhone (konto, recept, veckomeny, inköpslista, Cook Mode, Share Extension)
+    - [ ] TestFlight: ladda upp build, bjud in testers, samla feedback
+
+- [ ] **App Store Connect & metadata**
+    - [ ] Skapa App i App Store Connect (namn, bundle ID, ikon, kategori, språk)
+    - [ ] Fyll i metadata (beskrivning, nyckelord, support-URL, Privacy Policy, Terms)
+    - [ ] Ladda upp skärmdumpar (alla skärmstorlekar)
+    - [ ] Fyll i App Privacy-formulär
+
+- [ ] **Skicka in för review**
+    - [ ] Välj build, kontrollera version/build-nummer, fyll i alla fält, submit for review

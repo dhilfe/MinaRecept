@@ -1,8 +1,22 @@
 from __future__ import annotations
 
+import json
+import logging
+import time
+from functools import lru_cache
+
+import requests
+from django.conf import settings
+from django.contrib.auth.models import User
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+from jose import jwt
 from rest_framework import permissions, status, viewsets
+from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from .models import Recipe, ShoppingList, ShoppingListItem, ShoppingListRecipeSource, WeeklyMenu, WeeklyMenuItem, WeeklyPlan
 from .importing import import_recipe_from_url
@@ -15,6 +29,126 @@ from .serializers import (
     WeeklyMenuSerializer,
     WeeklyPlanSerializer,
 )
+
+logger = logging.getLogger(__name__)
+
+class AppleLoginView(APIView):
+    """
+    Exchanges an Apple Sign-In ID Token for a Django Auth Token.
+    Creates a new user if one doesn't exist.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        id_token = request.data.get('id_token')
+        if not id_token:
+            return Response({'detail': 'Missing id_token.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Optional name fields provided by client on first login
+        first_name = request.data.get('first_name', '')
+        last_name = request.data.get('last_name', '')
+
+        try:
+            # 1. Fetch Apple's public keys
+            apple_public_keys = self.get_apple_keys()
+            
+            # 2. Decode header to find the Key ID (kid)
+            header = jwt.get_unverified_header(id_token)
+            kid = header.get('kid')
+            
+            # 3. Find the correct key
+            key = next(k for k in apple_public_keys if k['kid'] == kid)
+            
+            # 4. Verify the token
+            # Audience should be the Bundle ID (client_id)
+            # We support multiple clients (e.g. App and Extension) so we might need to check against a list,
+            # but usually it's the main App Bundle ID.
+            # For now, we accept the audience if it matches our expected bundle ID.
+            
+            decoded = jwt.decode(
+                id_token,
+                key,
+                algorithms=['RS256'],
+                audience=settings.SOCIALACCOUNT_PROVIDERS['apple']['APP']['client_id'],
+                options={'verify_exp': True} # Check expiration
+            )
+            
+            # 5. Extract user info
+            apple_sub = decoded.get('sub') # Unique Apple User ID
+            email = decoded.get('email', '')
+            
+            if not apple_sub:
+                return Response({'detail': 'Invalid token: missing sub.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 6. Find or Create User
+            user = self.get_or_create_user(apple_sub, email, first_name, last_name)
+            
+            # 7. Generate/Get Token
+            token, _ = Token.objects.get_or_create(user=user)
+            
+            return Response({
+                'token': token.key,
+                'user_id': user.pk,
+                'email': user.email,
+                'username': user.username
+            })
+
+        except StopIteration:
+            return Response({'detail': 'Invalid token: matching key not found.'}, status=status.HTTP_400_BAD_REQUEST)
+        except jwt.ExpiredSignatureError:
+            return Response({'detail': 'Token has expired.'}, status=status.HTTP_400_BAD_REQUEST)
+        except jwt.JWTClaimsError as e:
+            return Response({'detail': f'Token claims invalid: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.exception("Apple Login failed")
+            return Response({'detail': f'Login failed: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @lru_cache(maxsize=1)
+    def get_apple_keys(self):
+        """Fetch and cache Apple's public keys."""
+        # Cache for a while (LRU cache handles in-memory caching)
+        # In a real production app, you might want to handle cache expiration more explicitly,
+        # but keys rotate infrequently.
+        url = "https://appleid.apple.com/auth/keys"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        return resp.json()['keys']
+
+    def get_or_create_user(self, apple_sub, email, first_name, last_name):
+        # Strategy:
+        # 1. Look for user by 'username' = apple_sub (Most reliable)
+        # 2. Look for user by 'email' (if provided)
+        # 3. Create new user
+        
+        # Check by sub (username)
+        user = User.objects.filter(username=apple_sub).first()
+        if user:
+            return user
+            
+        # Check by email
+        if email:
+            user = User.objects.filter(email__iexact=email).first()
+            if user:
+                # Link this user to the apple_sub? 
+                # Ideally we shouldn't change the username of an existing user as it might break things,
+                # but we can rely on the email match.
+                # For future consistency, we might want to store the apple_sub in a separate profile or SocialAccount,
+                # but for this MVP, logging them in is sufficient.
+                return user
+        
+        # Create new
+        # Use apple_sub as username to ensure uniqueness and stability
+        user = User.objects.create_user(
+            username=apple_sub,
+            email=email,
+            password=None # Unusable password
+        )
+        
+        if first_name: user.first_name = first_name
+        if last_name: user.last_name = last_name
+        user.save()
+        
+        return user
 
 
 class OwnedModelViewSet(viewsets.ModelViewSet):
@@ -379,7 +513,6 @@ class WeeklyMenuViewSet(OwnedModelViewSet):
             })
                 
         return Response(sorted_result)
-
 
 
 class WeeklyMenuItemViewSet(viewsets.ModelViewSet):

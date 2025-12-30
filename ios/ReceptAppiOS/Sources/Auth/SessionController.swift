@@ -28,6 +28,12 @@ final class SessionController: ObservableObject {
     func loadFromStorageIfNeeded() {
         if token == nil {
             token = tokenStore.loadToken()
+            
+            // Ensure token is synced to App Group (in case it was lost or only in Keychain)
+            if let token {
+                let sharedDefaults = UserDefaults(suiteName: AppGroupConfig.suiteName)
+                sharedDefaults?.set(token, forKey: AppGroupConfig.tokenKey)
+            }
         }
         processPendingImportIfPossible()
     }
@@ -38,7 +44,14 @@ final class SessionController: ObservableObject {
 
         // Share token with the Share Extension via App Group UserDefaults.
         // NOTE: Requires App Groups entitlements for both targets.
-        UserDefaults(suiteName: AppGroupConfig.suiteName)?.set(token, forKey: AppGroupConfig.tokenKey)
+        let sharedDefaults = UserDefaults(suiteName: AppGroupConfig.suiteName)
+        sharedDefaults?.set(token, forKey: AppGroupConfig.tokenKey)
+        sharedDefaults?.synchronize()
+        if let writtenToken = sharedDefaults?.string(forKey: AppGroupConfig.tokenKey) {
+            sessionLogger.info("[DEBUG] Token written to App Group: \(writtenToken, privacy: .private)")
+        } else {
+            sessionLogger.error("[DEBUG] Failed to write token to App Group UserDefaults!")
+        }
         processPendingImportIfPossible()
     }
 

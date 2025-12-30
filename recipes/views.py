@@ -1,4 +1,13 @@
+from django.views.generic import TemplateView
+
+# --- Policy & Terms ---
+class PrivacyPolicyView(TemplateView):
+    template_name = "privacy_policy.html"
+
+class TermsView(TemplateView):
+    template_name = "terms.html"
 from django.shortcuts import render, redirect, get_object_or_404
+from django_ratelimit.decorators import ratelimit
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -17,11 +26,12 @@ import re
 import instaloader
 
 
+@ratelimit(key='ip', rate='5/m', block=True)
 def signup_view(request):
-    """Simple email+password signup.
-
-    This is intentionally minimal (no OAuth credentials required) and works with
-    the existing LoginView by using email as the username.
+    """
+    Handle user signup with email and password.
+    Minimal implementation: no OAuth, uses email as username.
+    Redirects authenticated users to recipe list.
     """
 
     if request.user.is_authenticated:
@@ -40,8 +50,22 @@ def signup_view(request):
     return render(request, 'recipes/signup.html', {'form': form})
 
 
+from django.contrib.auth import views as auth_views
+
+
+# Custom LoginView with rate limiting to prevent brute force attacks.
+class RateLimitedLoginView(auth_views.LoginView):
+    from django.utils.decorators import method_decorator
+    @method_decorator(ratelimit(key='ip', rate='10/m', block=True))
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+
 @login_required
 def shopping_lists_view(request):
+    """
+    Display and manage user's shopping lists.
+    Ensures a main list exists, allows creation of new lists, and annotates each list with unchecked item counts.
+    """
     # Ensure user has a main list
     main_list = ShoppingList.objects.filter(user=request.user, is_main=True).first()
     if not main_list:
@@ -52,7 +76,7 @@ def shopping_lists_view(request):
             candidate.save()
             main_list = candidate
         else:
-            # Create one
+            # Create one if none found
             main_list = ShoppingList.objects.create(user=request.user, name="Inköpslista", is_main=True)
 
     if request.method == 'POST' and request.POST.get('action') == 'create':
@@ -65,7 +89,7 @@ def shopping_lists_view(request):
     # Get all other lists
     saved_lists = ShoppingList.objects.filter(user=request.user).exclude(id=main_list.id).order_by('-updated_at')
     
-    # Annotate counts
+    # Annotate counts for unchecked items
     unchecked = ShoppingListItem.objects.filter(user=request.user, shopping_list=main_list, checked=False).count()
     main_list.unchecked_count = unchecked
 
@@ -80,18 +104,24 @@ def shopping_lists_view(request):
 
 @login_required
 def shopping_list_detail_view(request, list_id: int):
+    """
+    View and edit a specific shopping list.
+    Handles adding, editing, and deleting items, as well as clearing the list.
+    """
     shopping_list = get_object_or_404(ShoppingList, id=list_id, user=request.user)
 
     if request.method == 'POST':
         action = request.POST.get('action', 'save')
 
         if action == 'clear_all':
+            # Remove all items and sources from the list
             ShoppingListItem.objects.filter(user=request.user, shopping_list=shopping_list).delete()
             ShoppingListRecipeSource.objects.filter(user=request.user, shopping_list=shopping_list).delete()
             messages.success(request, 'Listan rensad.')
             return redirect('shopping_list_detail', list_id=shopping_list.id)
 
         if action == 'clear_checked':
+            # Remove only checked items
             ShoppingListItem.objects.filter(user=request.user, shopping_list=shopping_list, checked=True).delete()
             messages.success(request, 'Avbockade rader borttagna.')
             return redirect('shopping_list_detail', list_id=shopping_list.id)
@@ -102,15 +132,15 @@ def shopping_list_detail_view(request, list_id: int):
             return redirect('shopping_list_detail', list_id=shopping_list.id)
 
         if request.POST.get('add_new') == '1':
+            # Add a new item to the list
             new_name = (request.POST.get('new_name') or '').strip()
             new_amount = (request.POST.get('new_amount') or '').strip()
             new_unit = (request.POST.get('new_unit') or '').strip()
             if new_name:
                 upsert_shopping_list_item(request.user, shopping_list, new_name, new_amount, new_unit)
             return redirect('shopping_list_detail', list_id=shopping_list.id)
-            return redirect('shopping_list_detail', list_id=shopping_list.id)
 
-        # Save edits
+        # Save edits to all items
         items = ShoppingListItem.objects.filter(user=request.user, shopping_list=shopping_list)
         for item in items:
             item.name = (request.POST.get(f'name_{item.id}') or '').strip() or item.name
@@ -139,8 +169,11 @@ def shopping_list_detail_view(request, list_id: int):
 
 @login_required
 def choose_shopping_list_for_recipe(request, pk):
+    """
+    Allow user to select or create a shopping list to add a recipe's ingredients to.
+    Handles both GET (show selection) and POST (add to list or create new).
+    """
     recipe = get_object_or_404(Recipe, pk=pk, user=request.user)
-
     lists = ShoppingList.objects.filter(user=request.user).order_by('-is_main', '-updated_at')
 
     if request.method == 'GET':
@@ -164,6 +197,10 @@ def choose_shopping_list_for_recipe(request, pk):
 
 
 def _add_recipe_ingredients_to_shopping_list(request, recipe: Recipe, shopping_list: ShoppingList):
+    """
+    Helper to add all ingredients from a recipe to a shopping list.
+    Shows user feedback depending on what was added or merged.
+    """
     result = add_ingredients_to_list(request.user, recipe, shopping_list)
     
     if result['already_exists']:
@@ -179,7 +216,10 @@ def _add_recipe_ingredients_to_shopping_list(request, recipe: Recipe, shopping_l
     return redirect('shopping_list_detail', list_id=shopping_list.id)
 
 def parse_recipe_text(text):
-    """Parse raw text to extract title, ingredients and steps."""
+    """
+    Parse raw text to extract title, ingredients, and steps.
+    Uses heuristics and common section headers to split content.
+    """
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     title = ""
     ingredients = []
@@ -239,7 +279,10 @@ def parse_recipe_text(text):
     return title, ingredients, steps
 
 def parse_iso_duration(duration_str):
-    """Parse ISO 8601 duration string (e.g., PT1H30M) to minutes."""
+    """
+    Parse ISO 8601 duration string (e.g., PT1H30M) to minutes.
+    Returns 0 if parsing fails.
+    """
     if not duration_str:
         return 0
     match = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?', duration_str)
@@ -250,7 +293,10 @@ def parse_iso_duration(duration_str):
     return hours * 60 + minutes
 
 def extract_json_ld(soup):
-    """Extract recipe data from JSON-LD."""
+    """
+    Extract recipe data from JSON-LD script tags in HTML soup.
+    Returns the first recipe node found, or None.
+    """
     scripts = soup.find_all('script', type='application/ld+json')
     for script in scripts:
         try:
@@ -274,7 +320,10 @@ def extract_json_ld(soup):
 
 
 def _flatten_instruction_texts(node):
-    """Flatten JSON-LD recipeInstructions into a list of step strings."""
+    """
+    Flatten JSON-LD recipeInstructions into a list of step strings.
+    Handles HowToStep, HowToSection, and nested structures.
+    """
     steps: list[str] = []
 
     def add_text(value):

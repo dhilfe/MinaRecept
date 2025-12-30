@@ -1,11 +1,11 @@
 
 ⸻
 
-Programvaruspecifikation – ReceptApp (arbetsnamn)
+Programvaruspecifikation – MinaRecept (arbetsnamn)
 
 1. Syfte & vision
 
-ReceptApp ska göra det enkelt att samla, strukturera och använda recept oavsett var användaren hittar dem (sociala medier, webbsidor, kokböcker, egna idéer).
+MinaRecept ska göra det enkelt att samla, strukturera och använda recept oavsett var användaren hittar dem (sociala medier, webbsidor, kokböcker, egna idéer).
 
 Appen ska:
 	•	Minska “varje-dag-vad-ska-vi-äta”-stress.
@@ -66,19 +66,19 @@ Mål: Med ett klick kunna spara ett recept man ser i sitt flöde.
 Möjliga lösningar (kan implementeras stegvis):
 	1.	Dela-funktion i mobil (Share/Skicka till):
 	•	Användaren trycker på “Dela” i t.ex. Instagram/Facebook.
-	•	Väljer “Spara till ReceptApp” i delningsmenyn.
+	•	Väljer “Spara till MinaRecept” i delningsmenyn.
 	•	Appen tar emot:
 	•	Länk till inlägget / sidan.
 	•	Eventuell text (caption/beskrivning).
 	•	Användaren kan sedan redigera och komplettera receptet i appen.
 	2.	Webbläsartillägg (Chrome/Edge/Safari):
-	•	Användaren klickar på en knapp i webbläsaren “Spara i ReceptApp”.
+	•	Användaren klickar på en knapp i webbläsaren “Spara i MinaRecept”.
 	•	Appen:
 	•	Hämtar sidans titel, bild och text.
 	•	Försöker identifiera ingredienslista och instruktioner.
 	3.	Klistra in länk manuellt (basfunktion):
 	•	Användaren kopierar en länk.
-	•	Öppnar ReceptApp.
+	•	Öppnar MinaRecept.
 	•	Väljer “Nytt recept från länk”.
 	•	Appen försöker hämta relevant innehåll automatiskt (titel, bild, text).
 
@@ -256,7 +256,7 @@ Fas 2 – Förfining & integrationer
 
 Fas 3 – Mobilappar & delningsintegration
 	•	iOS- och Android-app.
-	•	“Dela till ReceptApp” från andra appar.
+	•	“Dela till MinaRecept” från andra appar.
 	•	Publicering i App Store/Google Play.
 	•	In-App Purchase / uppgradering till betalversion.
 

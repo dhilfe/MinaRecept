@@ -14,12 +14,21 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: se.receptapp.ios
+        MARKETING_VERSION: 1.0.0
+        CURRENT_PROJECT_VERSION: 1
         CODE_SIGN_ENTITLEMENTS: ReceptAppiOS/ReceptAppiOS.entitlements
-        INFOPLIST_KEY_CFBundleDisplayName: ReceptApp
-        INFOPLIST_KEY_API_BASE_URL: http://127.0.0.1:8000/api/
+        INFOPLIST_KEY_CFBundleDisplayName: MinaRecept
+        INFOPLIST_KEY_API_BASE_URL: https://api.receptapp.se/api/
       configs:
+        Release:
+          INFOPLIST_KEY_API_BASE_URL: https://api.receptapp.se/api/
+          APP_GROUPS:
+            - group.se.receptapp.ios
         Debug:
+          INFOPLIST_KEY_API_BASE_URL: http://127.0.0.1:8000/api/
           CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: YES
+          APP_GROUPS:
+            - group.se.receptapp.ios
     info:
       path: ReceptAppiOS/Resources/Info.plist
       properties:
@@ -48,16 +57,25 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: NO
         PRODUCT_BUNDLE_IDENTIFIER: se.receptapp.ios.share
+        MARKETING_VERSION: 1.0.0
+        CURRENT_PROJECT_VERSION: 1
         CODE_SIGN_ENTITLEMENTS: ReceptAppShare/ReceptAppShare.entitlements
-        INFOPLIST_KEY_CFBundleDisplayName: ReceptApp Share
-        INFOPLIST_KEY_API_BASE_URL: http://127.0.0.1:8000/api/
+        INFOPLIST_KEY_CFBundleDisplayName: MinaRecept Share
+        INFOPLIST_KEY_API_BASE_URL: https://api.receptapp.se/api/
       configs:
+        Release:
+          INFOPLIST_KEY_API_BASE_URL: https://api.receptapp.se/api/
+          APP_GROUPS:
+            - group.se.receptapp.ios
         Debug:
+          INFOPLIST_KEY_API_BASE_URL: http://127.0.0.1:8000/api/
           CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: YES
+          APP_GROUPS:
+            - group.se.receptapp.ios
     info:
       path: ReceptAppShare/Info.plist
       properties:
-        CFBundleDisplayName: ReceptApp Share
+        CFBundleDisplayName: MinaRecept Share
         API_BASE_URL: $(INFOPLIST_KEY_API_BASE_URL)
         NSAppTransportSecurity:
           NSExceptionDomains:
@@ -73,3 +91,30 @@ targets:
               NSExtensionActivationSupportsWebURLWithMaxCount: 1
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+
+  ReceptAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ReceptAppiOS/Tests
+    dependencies:
+      - target: ReceptAppiOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: se.receptapp.ios.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/ReceptAppiOS.app/ReceptAppiOS"
+        ENABLE_TESTING_SEARCH_PATHS: YES
+        GENERATE_INFOPLIST_FILE: YES
+
+  ReceptAppShareTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ReceptAppShareTests
+    dependencies:
+      - target: ReceptAppShare
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: se.receptapp.ios.sharetests
+        ENABLE_TESTING_SEARCH_PATHS: YES
+        GENERATE_INFOPLIST_FILE: YES

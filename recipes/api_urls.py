@@ -5,6 +5,7 @@ from rest_framework.authtoken.views import obtain_auth_token
 from rest_framework.routers import DefaultRouter
 
 from .api_views import (
+    AppleLoginView,
     RecipeViewSet,
     ShoppingListItemViewSet,
     ShoppingListViewSet,
@@ -23,5 +24,6 @@ router.register(r'weekly-menu-items', WeeklyMenuItemViewSet, basename='weeklymen
 
 urlpatterns = [
     path('auth/token/', obtain_auth_token, name='api-token'),
+    path('auth/apple/', AppleLoginView.as_view(), name='api-auth-apple'),
     path('', include(router.urls)),
 ]

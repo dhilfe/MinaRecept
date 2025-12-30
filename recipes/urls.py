@@ -1,12 +1,20 @@
 from django.urls import path
 from django.contrib.auth import views as auth_views
+from .views import RateLimitedLoginView
 from . import views
+from .views import PrivacyPolicyView, TermsView
 
 urlpatterns = [
     path('', views.RecipeListView.as_view(), name='recipe_list'),
-    path('login/', auth_views.LoginView.as_view(template_name='recipes/login.html'), name='login'),
+    path('login/', RateLimitedLoginView.as_view(template_name='recipes/login.html'), name='login'),
     path('signup/', views.signup_view, name='signup'),
     path('logout/', auth_views.LogoutView.as_view(next_page='login'), name='logout'),
+
+    # Password reset (force password reset, e-postlänk)
+    path('password_reset/', auth_views.PasswordResetView.as_view(template_name='recipes/password_reset_form.html'), name='password_reset'),
+    path('password_reset/done/', auth_views.PasswordResetDoneView.as_view(template_name='recipes/password_reset_done.html'), name='password_reset_done'),
+    path('reset/<uidb64>/<token>/', auth_views.PasswordResetConfirmView.as_view(template_name='recipes/password_reset_confirm.html'), name='password_reset_confirm'),
+    path('reset/done/', auth_views.PasswordResetCompleteView.as_view(template_name='recipes/password_reset_complete.html'), name='password_reset_complete'),
     
     path('recipe/<int:pk>/', views.RecipeDetailView.as_view(), name='recipe_detail'),
     path('recipe/<int:pk>/cook/', views.RecipeCookView.as_view(), name='recipe_cook'),
@@ -33,4 +41,6 @@ urlpatterns = [
     path('weekly-plan/random/', views.generate_random_menu, name='generate_random_menu'),
     path('weekly-plan/add-to-shopping-list/', views.add_weekly_menu_to_shopping_list, name='add_weekly_menu_to_shopping_list'),
     path('weekly-plan/clear/', views.clear_menu, name='clear_menu'),
+    path('privacy/', PrivacyPolicyView.as_view(), name='privacy_policy'),
+    path('terms/', TermsView.as_view(), name='terms'),
 ]

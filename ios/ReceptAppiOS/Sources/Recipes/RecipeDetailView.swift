@@ -50,6 +50,15 @@ struct RecipeDetailView: View {
                         Text(type.name).tag(type.id)
                     }
                 }
+                
+                if let minutes = recipe.cookingTime, minutes > 0 {
+                    HStack {
+                        Text("Tid")
+                        Spacer()
+                        Text(formatDuration(minutes))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
             if let description = recipe.description, !description.isEmpty {
@@ -129,6 +138,18 @@ struct RecipeDetailView: View {
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         return parts.joined(separator: " ")
+    }
+
+    private func formatDuration(_ minutes: Int) -> String {
+        if minutes < 60 {
+            return "\(minutes) min"
+        }
+        let h = minutes / 60
+        let m = minutes % 60
+        if m == 0 {
+            return "\(h) tim"
+        }
+        return "\(h) tim \(m) min"
     }
 
     private func parseSteps(_ raw: String?) -> [String] {

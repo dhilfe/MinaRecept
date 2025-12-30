@@ -1,7 +1,9 @@
 import SwiftUI
+import AuthenticationServices
 
 struct LoginView: View {
     @EnvironmentObject private var session: SessionController
+    @Environment(\.colorScheme) var colorScheme
 
     @State private var username: String = ""
     @State private var password: String = ""
@@ -18,7 +20,30 @@ struct LoginView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Inloggning") {
+                Section {
+                    SignInWithAppleButton(.signIn) { request in
+                        request.requestedScopes = [.fullName, .email]
+                    } onCompletion: { result in
+                        handleAppleLogin(result)
+                    }
+                    .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+                    .frame(height: 50)
+                    .listRowInsets(EdgeInsets()) // Edge-to-edge button
+                    .padding(.vertical, 8)
+                } header: {
+                    Text("Snabbinloggning")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Logga in eller skapa konto automatiskt med ditt Apple ID.")
+#if DEBUG
+                        Text("API: \(AppConfig.apiBaseURL.absoluteString)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+#endif
+                    }
+                }
+
+                Section("Eller logga in med lösenord") {
                     TextField("Användarnamn", text: $username)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled(true)
@@ -60,7 +85,7 @@ struct LoginView: View {
                     .disabled(isLoading || username.isEmpty || password.isEmpty)
                 }
             }
-            .navigationTitle("ReceptApp")
+            .navigationTitle("MinaRecept")
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -68,7 +93,8 @@ struct LoginView: View {
                 }
             }
             .onAppear {
-                focusField = .username
+                // Optional: focus username if preferred, but maybe better to let user choose apple login first
+                // focusField = .username
             }
         }
     }
@@ -87,6 +113,60 @@ struct LoginView: View {
             } else {
                 errorMessage = APIError.userFacingMessage(for: error)
             }
+        }
+    }
+
+    private func handleAppleLogin(_ result: Result<ASAuthorization, Error>) {
+        errorMessage = nil
+        isLoading = true
+        
+        switch result {
+        case .success(let authorization):
+            guard let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                errorMessage = "Kunde inte läsa Apple ID-uppgifter."
+                isLoading = false
+                return
+            }
+
+            guard let identityTokenData = appleIDCredential.identityToken,
+                  let identityToken = String(data: identityTokenData, encoding: .utf8) else {
+                errorMessage = "Kunde inte hämta identity token."
+                isLoading = false
+                return
+            }
+
+            // Name is only available on first login
+            let firstName = appleIDCredential.fullName?.givenName
+            let lastName = appleIDCredential.fullName?.familyName
+
+            Task {
+                do {
+                    let token = try await APIClient.shared.loginWithApple(
+                        idToken: identityToken,
+                        firstName: firstName,
+                        lastName: lastName
+                    )
+                    await MainActor.run {
+                        session.setToken(token)
+                        isLoading = false
+                    }
+                } catch {
+                    await MainActor.run {
+                        errorMessage = APIError.userFacingMessage(for: error)
+                        isLoading = false
+                    }
+                }
+            }
+
+        case .failure(let error):
+            // Check for user cancellation
+            if let asError = error as? ASAuthorizationError, asError.code == .canceled {
+                // User cancelled, do nothing
+                isLoading = false
+                return
+            }
+            errorMessage = "Apple Login misslyckades: \(error.localizedDescription)"
+            isLoading = false
         }
     }
 }

@@ -38,7 +38,7 @@ Det här dokumentet används för att spåra feature requests när vi jobbar i b
 ---
 
 ## FR-20251224-03 – iOS-spår: förutsättningar för iOS-app
-- **Beskrivning:** Skapa förutsättningar för att kunna bygga en iOS-app som använder ReceptApp (iOS-spåret). Fokus är grundarkitektur/kontrakt, inte full app-funktionalitet.
+- **Beskrivning:** Skapa förutsättningar för att kunna bygga en iOS-app som använder MinaRecept (iOS-spåret). Fokus är grundarkitektur/kontrakt, inte full app-funktionalitet.
 - **Målbild:** En iOS-klient kan autentisera, hämta data och använda Cook Mode/inköpslistor via en stabil backend.
 - **Acceptanskriterier (iOS-spår):**
   - API-kontrakt definierat (minsta endpoints för recept, veckomeny, inköpslistor, cook/timers).
@@ -69,7 +69,7 @@ Det här dokumentet används för att spåra feature requests när vi jobbar i b
 ---
 
 ## FR-20251224-05 – iOS-app (SwiftUI) MVP
-- **Beskrivning:** Bygg en körbar iOS-app som använder ReceptApps API. Fokus på en minimal men användbar klient: login → receptlista → receptdetalj (ingredienser + steg) → Cook Mode.
+- **Beskrivning:** Bygg en körbar iOS-app som använder MinaRecepts API. Fokus på en minimal men användbar klient: login → receptlista → receptdetalj (ingredienser + steg) → Cook Mode.
 - **Acceptanskriterier:**
   - App kan logga in mot `/api/auth/token/` och spara token lokalt.
   - App kan hämta `/api/recipes/` och visa lista.
@@ -98,3 +98,24 @@ Det här dokumentet används för att spåra feature requests när vi jobbar i b
 - **Påverkar:** ios/, docs
 - **Branch:** feature/fr-20251225-01-ios-shopping-lists
 - **Status:** ready-for-merge
+
+---
+
+## FR-20251227-01 – Apple Sign-In
+- **Beskrivning:** Gör det möjligt för vem som helst att ladda ner appen och logga in/skapa konto direkt via sitt Apple-ID.
+- **Acceptanskriterier:**
+  - Backend: Ny endpoint `/api/auth/apple/` som validerar ID-token och skapar/loggar in användare.
+  - iOS: "Sign in with Apple"-knapp på inloggningsskärmen.
+  - iOS: Hantera ASAuthorizationController och skicka token till backend.
+- **Påverkar:** API, ios/auth
+- **Status:** done
+
+---
+
+## FR-Future-01 – In-App Purchases (Förberedelse)
+- **Beskrivning:** Förbered appen för framtida betalfunktioner (Premium).
+- **Plan:**
+  - Identifiera vilka funktioner som ska vara låsta.
+  - Implementera StoreKit i iOS-appen.
+  - Implementera kvitto-validering i backend.
+- **Status:** planned

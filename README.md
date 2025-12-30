@@ -1,6 +1,6 @@
-# ReceptApp (Spara_Recept)
+# MinaRecept (Spara_Recept)
 
-ReceptApp är en Django-webbapp + en iOS-app (SwiftUI) för att spara recept, planera veckomeny och skapa inköpslistor.
+MinaRecept är en Django-webbapp + en iOS-app (SwiftUI) för att spara recept, planera veckomeny och skapa inköpslistor.
 
 ## Innehåll
 

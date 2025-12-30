@@ -1,4 +1,4 @@
-# ReceptApp API (för iOS-klient)
+# MinaRecept API (för iOS-klient)
 
 Bas-URL:
 - Dev: `http://127.0.0.1:8000/api/`

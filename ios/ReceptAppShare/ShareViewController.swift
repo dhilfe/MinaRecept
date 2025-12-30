@@ -142,15 +142,19 @@ class ShareViewController: SLComposeServiceViewController {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        guard let token = UserDefaults(suiteName: AppGroupConfig.suiteName)?.string(forKey: AppGroupConfig.tokenKey), !token.isEmpty else {
-            shareLogger.error("Missing shared token (App Groups). Cannot import from Share Extension.")
+        let sharedDefaults = UserDefaults(suiteName: AppGroupConfig.suiteName)
+        let token = sharedDefaults?.string(forKey: AppGroupConfig.tokenKey) ?? ""
+        if token.isEmpty {
+            shareLogger.error("[DEBUG] Missing shared token (App Groups). Cannot import from Share Extension.")
+            let allKeys = sharedDefaults?.dictionaryRepresentation().keys.joined(separator: ", ") ?? "(no keys)"
+            shareLogger.error("[DEBUG] App Group UserDefaults keys: \(allKeys)")
             DispatchQueue.main.async {
                 self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
             }
             return
         }
         request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
-        shareLogger.info("Using shared token from App Group")
+        shareLogger.info("[DEBUG] Using shared token from App Group: \(token)")
         
         let body: [String: Any] = [
             "url": url.absoluteString,
@@ -180,7 +184,7 @@ class ShareViewController: SLComposeServiceViewController {
                 shareLogger.info("Upload HTTP status: \(httpResponse.statusCode)")
                 if httpResponse.statusCode == 201 || httpResponse.statusCode == 200 {
                     DispatchQueue.main.async {
-                        self.showEphemeralNoticeAndComplete(message: "Sparad till ReceptApp")
+                        self.showEphemeralNoticeAndComplete(message: "Sparad till MinaRecept")
                     }
                     return
                 } else {

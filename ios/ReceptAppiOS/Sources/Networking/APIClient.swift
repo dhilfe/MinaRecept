@@ -62,6 +62,7 @@ final class APIClient {
 
     func login(username: String, password: String) async throws -> String {
         let url = try url("auth/token/")
+        apiLogger.info("POST \(url.absoluteString, privacy: .public) (login username/password)")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -78,6 +79,45 @@ final class APIClient {
         }
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         guard (200...299).contains(http.statusCode) else { throw APIError.httpStatus(http.statusCode, nil) }
+
+        do {
+            let tokenResponse = try decoder.decode(TokenResponse.self, from: data)
+            return tokenResponse.token
+        } catch {
+            throw APIError.decoding(error)
+        }
+    }
+
+    func loginWithApple(idToken: String, firstName: String?, lastName: String?) async throws -> String {
+        let url = try url("auth/apple/")
+        apiLogger.info("POST \(url.absoluteString, privacy: .public) (login apple)")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var body: [String: Any] = ["id_token": idToken]
+        if let firstName { body["first_name"] = firstName }
+        if let lastName { body["last_name"] = lastName }
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw APIError.network(error)
+        }
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else { 
+            // Try to extract error details
+            var message: String?
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let detail = json["detail"] as? String {
+                message = detail
+            }
+            throw APIError.httpStatus(http.statusCode, message) 
+        }
 
         do {
             let tokenResponse = try decoder.decode(TokenResponse.self, from: data)
