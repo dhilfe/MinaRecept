@@ -7,6 +7,7 @@ struct RecipeDetailView: View {
     @State private var isLoading: Bool = false
     @State private var errorMessage: String? = nil
     @State private var showSuccessAlert = false
+    @State private var showEditSheet = false
 
     init(recipe: RecipeDTO) {
         _recipe = State(initialValue: recipe)
@@ -106,11 +107,24 @@ struct RecipeDetailView: View {
         .navigationTitle(recipe.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Redigera") { showEditSheet = true }
+                    .disabled(isLoading)
+            }
+
             if isLoading {
                 ToolbarItem(placement: .topBarTrailing) {
                     ProgressView()
                 }
             }
+        }
+        .sheet(isPresented: $showEditSheet) {
+            RecipeEditView(recipe: recipe) { updated in
+                // Update local detail + ask list views to refresh.
+                recipe = updated
+                session.reloadRecipesSignal += 1
+            }
+            .environmentObject(session)
         }
         .safeAreaInset(edge: .bottom) {
             if let errorMessage {
@@ -222,6 +236,7 @@ struct RecipeDetailView: View {
                 token: token
             )
             recipe = updatedRecipe
+            session.reloadRecipesSignal += 1
         } catch {
             errorMessage = APIError.userFacingMessage(for: error)
         }
