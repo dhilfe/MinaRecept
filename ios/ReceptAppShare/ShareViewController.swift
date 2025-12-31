@@ -65,6 +65,10 @@ class ShareViewController: SLComposeServiceViewController {
             guard let attachments = item.attachments else { continue }
 
             for provider in attachments {
+                // Debug: learn what other apps share (ICA/kokaihop, etc.).
+                let utis = provider.registeredTypeIdentifiers.joined(separator: ", ")
+                shareLogger.info("[DEBUG] attachment UTIs: \(utis, privacy: .public)")
+
                 if provider.canLoadObject(ofClass: URL.self) {
                     _ = provider.loadObject(ofClass: URL.self) { [weak self] object, error in
                         if let error {
