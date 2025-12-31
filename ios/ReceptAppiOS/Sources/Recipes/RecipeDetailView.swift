@@ -13,96 +13,18 @@ struct RecipeDetailView: View {
         _recipe = State(initialValue: recipe)
     }
 
+    private var parsedSteps: [String] { parseSteps(recipe.steps) }
+    private var parsedIngredients: [IngredientDTO] { IngredientsParser.parse(recipe.ingredients) }
+
     var body: some View {
         List {
-            let steps = parseSteps(recipe.steps)
-
-            if !steps.isEmpty {
-                Section {
-                    NavigationLink("Starta Cook Mode") {
-                        CookModeView(title: recipe.title, steps: steps)
-                    }
-                }
-            }
-
-            if let url = recipe.preferredImageURL {
-                Section {
-                    AsyncImage(url: url) { image in
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    } placeholder: {
-                        ProgressView()
-                    }
-                    .frame(height: 220)
-                    .clipped()
-                }
-                .listRowInsets(EdgeInsets())
-            }
-
-            Section {
-                Picker("Kategori", selection: Binding(
-                    get: { recipe.dishType ?? "lunch_dinner" },
-                    set: { newValue in
-                        Task { await updateDishType(newValue) }
-                    }
-                )) {
-                    ForEach(RecipeDTO.allDishTypes, id: \.id) { type in
-                        Text(type.name).tag(type.id)
-                    }
-                }
-                
-                if let minutes = recipe.cookingTime, minutes > 0 {
-                    HStack {
-                        Text("Tid")
-                        Spacer()
-                        Text(formatDuration(minutes))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-            if let description = recipe.description, !description.isEmpty {
-                Section("Beskrivning") {
-                    Text(description)
-                }
-            }
-
-            let ingredients = IngredientsParser.parse(recipe.ingredients)
-            if !ingredients.isEmpty {
-                Section("Ingredienser") {
-                    ForEach(ingredients) { ing in
-                        Text(formatIngredient(ing))
-                    }
-                    Button("Lägg till i inköpslista") {
-                        Task { await addToShoppingList() }
-                    }
-                    .disabled(isLoading)
-                }
-            }
-
-            if !steps.isEmpty {
-                Section("Gör så här") {
-                    ForEach(Array(steps.enumerated()), id: \.offset) { idx, step in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("\(idx + 1).")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(step)
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-            }
-
-            if (recipe.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               ingredients.isEmpty,
-               steps.isEmpty {
-                Section("Innehåll") {
-                    Text("Det här receptet saknar ingredienser eller steg.")
-                        .foregroundStyle(.secondary)
-                }
-            }
+            cookModeSection
+            imageSection
+            metaSection
+            descriptionSection
+            ingredientsSection
+            stepsSection
+            missingContentSection
         }
         .navigationTitle(recipe.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -144,6 +66,116 @@ struct RecipeDetailView: View {
         }
         .refreshable {
             await loadRecipe()
+        }
+    }
+
+    @ViewBuilder
+    private var cookModeSection: some View {
+        if !parsedSteps.isEmpty {
+            Section {
+                NavigationLink("Starta Cook Mode") {
+                    CookModeView(title: recipe.title, steps: parsedSteps)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var imageSection: some View {
+        if let url = recipe.preferredImageURL {
+            Section {
+                AsyncImage(url: url) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    ProgressView()
+                }
+                .frame(height: 220)
+                .clipped()
+            }
+            .listRowInsets(EdgeInsets())
+        }
+    }
+
+    private var dishTypeBinding: Binding<String> {
+        Binding(
+            get: { recipe.dishType ?? "lunch_dinner" },
+            set: { newValue in
+                Task { await updateDishType(newValue) }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var metaSection: some View {
+        Section {
+            Picker("Kategori", selection: dishTypeBinding) {
+                ForEach(RecipeDTO.allDishTypes, id: \.id) { type in
+                    Text(type.name).tag(type.id)
+                }
+            }
+
+            if let minutes = recipe.cookingTime, minutes > 0 {
+                HStack {
+                    Text("Tid")
+                    Spacer()
+                    Text(formatDuration(minutes))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var descriptionSection: some View {
+        if let description = recipe.description, !description.isEmpty {
+            Section("Beskrivning") {
+                Text(description)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var ingredientsSection: some View {
+        if !parsedIngredients.isEmpty {
+            Section("Ingredienser") {
+                ForEach(parsedIngredients) { ing in
+                    Text(formatIngredient(ing))
+                }
+                Button("Lägg till i inköpslista") {
+                    Task { await addToShoppingList() }
+                }
+                .disabled(isLoading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var stepsSection: some View {
+        if !parsedSteps.isEmpty {
+            Section("Gör så här") {
+                ForEach(Array(parsedSteps.enumerated()), id: \.offset) { idx, step in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("\(idx + 1).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(step)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var missingContentSection: some View {
+        let hasDescription = !(recipe.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if !hasDescription, parsedIngredients.isEmpty, parsedSteps.isEmpty {
+            Section("Innehåll") {
+                Text("Det här receptet saknar ingredienser eller steg.")
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
