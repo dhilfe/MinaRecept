@@ -44,7 +44,7 @@ struct RecipeDetailView: View {
             RecipeEditView(recipe: recipe) { updated in
                 // Update local detail + ask list views to refresh.
                 recipe = updated
-                session.reloadRecipesSignal += 1
+                session.triggerReloadRecipes()
             }
             .environmentObject(session)
         }
@@ -268,7 +268,7 @@ struct RecipeDetailView: View {
                 token: token
             )
             recipe = updatedRecipe
-            session.reloadRecipesSignal += 1
+            session.triggerReloadRecipes()
         } catch {
             errorMessage = APIError.userFacingMessage(for: error)
         }

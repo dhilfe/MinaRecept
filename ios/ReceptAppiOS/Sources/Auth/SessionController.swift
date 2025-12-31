@@ -25,6 +25,10 @@ final class SessionController: ObservableObject {
         token != nil
     }
 
+    func triggerReloadRecipes() {
+        reloadRecipesSignal += 1
+    }
+
     func loadFromStorageIfNeeded() {
         if token == nil {
             token = tokenStore.loadToken()
@@ -113,7 +117,7 @@ final class SessionController: ObservableObject {
             do {
                 try await APIClient.shared.importRecipe(url: pendingImportURLString, token: token)
                 sessionLogger.info("Import succeeded")
-                await MainActor.run { self.reloadRecipesSignal += 1 }
+                await MainActor.run { self.triggerReloadRecipes() }
             } catch {
                 sessionLogger.error("Import failed: \(String(describing: error), privacy: .public)")
                 // If needed later, we can surface an alert; for now rely on existing views.
