@@ -9,7 +9,7 @@ services:
     expose:
       - 8000
     env_file:
-      - .env.prod
+      - .env
     depends_on:
       - db
     restart: always
@@ -20,7 +20,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     env_file:
-      - .env.prod
+      - .env
     restart: always
 
   nginx:
@@ -36,14 +36,14 @@ services:
       - web
     restart: always
 
-  # Cloudflare Tunnel (valfritt, men rekommenderas starkt för Raspberry Pi hemma)
-  # tunnel:
-  #   image: cloudflare/cloudflared:latest
-  #   container_name: receptapp_tunnel
-  #   restart: unless-stopped
-  #   command: tunnel run
-  #   environment:
-  #     - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+  # Cloudflare Tunnel
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: receptapp_tunnel
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
 
 volumes:
   postgres_data:

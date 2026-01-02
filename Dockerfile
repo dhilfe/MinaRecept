@@ -1,5 +1,5 @@
 # Använd en lättviktig Python-bild (slim varianten är mindre och säkrare)
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 # Sätt arbetskatalog
 WORKDIR /app
