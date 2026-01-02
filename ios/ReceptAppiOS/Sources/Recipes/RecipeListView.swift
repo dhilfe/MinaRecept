@@ -50,56 +50,68 @@ struct RecipeListView: View {
             VStack(spacing: 0) {
                 categoryFilterBar
 
-                List {
-                    if searchedRecipes.isEmpty {
-                        Section {
-                            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                Text("Inga recept hittades.")
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Text("Inga recept matchar \"\(searchText)\".")
-                                    .foregroundStyle(.secondary)
-                                Button("Sök på Google") {
-                                    openGoogleSearch(query: searchText)
+                if recipes.isEmpty && !isLoading {
+                    EmptyStateView(
+                        iconName: "fork.knife",
+                        title: "Inga recept än",
+                        message: "Spara dina favoritrecept från webben genom att dela dem till MinaRecept.",
+                        actionTitle: "Hur gör man?",
+                        action: {
+                            openGoogleSearch(query: "recept")
+                        }
+                    )
+                } else {
+                    List {
+                        if searchedRecipes.isEmpty && !recipes.isEmpty {
+                            Section {
+                                if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    Text("Inga recept hittades.")
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Text("Inga recept matchar \"\(searchText)\".")
+                                        .foregroundStyle(.secondary)
+                                    Button("Sök på Google") {
+                                        openGoogleSearch(query: searchText)
+                                    }
                                 }
                             }
-                        }
-                    } else if filteredRecipes.isEmpty {
-                        Section {
-                            Text("Inga recept i vald kategori.")
-                                .foregroundStyle(.secondary)
-                        }
-                    } else {
-                        ForEach(sectionCategoryNames, id: \.self) { category in
-                            Section(category) {
-                                let sectionRecipes = filteredRecipes
-                                    .filter { categoryName(for: $0) == category }
-                                    .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+                        } else if filteredRecipes.isEmpty {
+                            Section {
+                                Text("Inga recept i vald kategori.")
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            ForEach(sectionCategoryNames, id: \.self) { category in
+                                Section(category) {
+                                    let sectionRecipes = filteredRecipes
+                                        .filter { categoryName(for: $0) == category }
+                                        .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
 
-                                ForEach(sectionRecipes) { recipe in
-                                    NavigationLink(value: recipe) {
-                                        HStack(spacing: 12) {
-                                            if let url = recipe.preferredImageURL {
-                                                AsyncImage(url: url) { image in
-                                                    image
-                                                        .resizable()
-                                                        .scaledToFill()
-                                                } placeholder: {
-                                                    Color.secondary.opacity(0.2)
+                                    ForEach(sectionRecipes) { recipe in
+                                        NavigationLink(value: recipe) {
+                                            HStack(spacing: 12) {
+                                                if let url = recipe.preferredImageURL {
+                                                    AsyncImage(url: url) { image in
+                                                        image
+                                                            .resizable()
+                                                            .scaledToFill()
+                                                    } placeholder: {
+                                                        Color.secondary.opacity(0.2)
+                                                    }
+                                                    .frame(width: 56, height: 56)
+                                                    .clipShape(RoundedRectangle(cornerRadius: 8))
                                                 }
-                                                .frame(width: 56, height: 56)
-                                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                            }
 
-                                            VStack(alignment: .leading) {
-                                                Text(recipe.title)
-                                                    .font(.headline)
+                                                VStack(alignment: .leading) {
+                                                    Text(recipe.title)
+                                                        .font(.headline)
+                                                }
                                             }
                                         }
                                     }
-                                }
-                                .onDelete { offsets in
-                                    deleteRecipes(in: sectionRecipes, at: offsets)
+                                    .onDelete { offsets in
+                                        deleteRecipes(in: sectionRecipes, at: offsets)
+                                    }
                                 }
                             }
                         }
@@ -122,6 +134,11 @@ struct RecipeListView: View {
                     }
                 }
             }
+            .overlay {
+                if isLoading && recipes.isEmpty {
+                    ProgressView("Laddar recept...")
+                }
+            }
             .safeAreaInset(edge: .bottom) {
                 if let errorMessage {
                     Text(errorMessage)
@@ -131,14 +148,12 @@ struct RecipeListView: View {
                 }
             }
             .background(
-                // Detect re-tapping the already-selected tab while we're on this view.
                 TabReselectDetector { _ in
                     performHomeReset()
                 }
                 .frame(width: 0, height: 0)
             )
             .onChange(of: resetToken) { _ in
-                // "Mina recept" acts like a home button: return to root and clear search.
                 performHomeReset()
             }
             .onChange(of: searchText) { _ in
@@ -217,7 +232,6 @@ struct RecipeListView: View {
         guard !trimmed.isEmpty else { return }
 
         var components = URLComponents(string: "https://www.google.com/search")
-        // Bias towards actual recipes in Swedish.
         components?.queryItems = [URLQueryItem(name: "q", value: "recept \(trimmed)")]
         guard let url = components?.url else { return }
         openURL(url)
@@ -225,6 +239,7 @@ struct RecipeListView: View {
 
     private func loadRecipes() async {
         guard let token = session.token else { return }
+        if isLoading { return }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -241,7 +256,6 @@ struct RecipeListView: View {
 
         let recipesToDelete = offsets.map { sectionRecipes[$0] }
 
-        // Optimistic local update
         let idsToDelete = Set(recipesToDelete.map { $0.id })
         recipes.removeAll { idsToDelete.contains($0.id) }
 

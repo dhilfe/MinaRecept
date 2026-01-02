@@ -76,6 +76,14 @@ struct CookModeView: View {
                 timerEndDate = nil
             }
         }
+        .onAppear {
+            // Keep screen awake while cooking
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
+        .onDisappear {
+            // Re-enable auto-lock
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
     }
 
     private var currentStep: String {

@@ -45,6 +45,7 @@ targets:
             127.0.0.1:
               NSExceptionAllowsInsecureHTTPLoads: true
               NSIncludesSubdomains: true
+        UILaunchScreen: {}
     dependencies:
       - target: ReceptAppShare
 
@@ -87,8 +88,17 @@ targets:
               NSIncludesSubdomains: true
         NSExtension:
           NSExtensionAttributes:
-            NSExtensionActivationRule:
-              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+            NSExtensionActivationRule: |
+              SUBQUERY (
+                  extensionItems,
+                  $extensionItem,
+                  SUBQUERY (
+                      $extensionItem.attachments,
+                      $attachment,
+                      ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.url" ||
+                      ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.plain-text"
+                  ).@count >= 1
+              ).@count >= 1
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
 

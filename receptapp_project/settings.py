@@ -42,7 +42,7 @@ else:
 # ALLOWED_HOSTS måste innehålla din prod-domän (och ev. IP för test)
 # Exempel: DJANGO_ALLOWED_HOSTS=api.receptapp.se,receptapp.se,127.0.0.1
 if DEBUG:
-    ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+    ALLOWED_HOSTS = ['*']
 else:
     ALLOWED_HOSTS = [h.strip() for h in os.getenv('DJANGO_ALLOWED_HOSTS', '').split(',') if h.strip()]
 

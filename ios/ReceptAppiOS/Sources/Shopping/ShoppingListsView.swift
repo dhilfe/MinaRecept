@@ -11,37 +11,57 @@ struct ShoppingListsView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                ForEach(lists) { list in
-                    NavigationLink(value: list) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(list.name)
-                                    .font(.headline)
+            Group {
+                if lists.isEmpty && !isLoading {
+                    EmptyStateView(
+                        iconName: "cart",
+                        title: "Inga inköpslistor",
+                        message: "Skapa en ny lista för att komma igång.",
+                        actionTitle: "Skapa lista",
+                        action: {
+                            newListName = ""
+                            showCreateAlert = true
+                        }
+                    )
+                } else {
+                    List {
+                        ForEach(lists) { list in
+                            NavigationLink(value: list) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(list.name)
+                                            .font(.headline)
 
-                                if let count = list.itemCount {
-                                    Text("\(count) varor")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                }
+                                        if let count = list.itemCount {
+                                            Text("\(count) varor")
+                                                .font(.subheadline)
+                                                .foregroundStyle(.secondary)
+                                        }
 
-                                if let date = list.updatedAt {
-                                    Text(date.formatted(date: .abbreviated, time: .shortened))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
+                                        if let date = list.updatedAt {
+                                            Text(date.formatted(date: .abbreviated, time: .shortened))
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
 
-                                if list.isRecurring {
-                                    Text("Återkommande")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        if list.isRecurring {
+                                            Text("Återkommande")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Spacer()
                                 }
                             }
-                            Spacer()
                         }
+                        .onDelete(perform: deleteList)
                     }
                 }
-                .onDelete(perform: deleteList)
+            }
+            .overlay {
+                if isLoading && lists.isEmpty {
+                    ProgressView("Laddar listor...")
+                }
             }
             .navigationTitle("Inköpslistor")
             .navigationDestination(for: ShoppingListDTO.self) { list in
