@@ -85,19 +85,55 @@ class ShareViewController: SLComposeServiceViewController {
                     return // Handle only the first URL found
                 }
 
-                // Fallback for providers that deliver URLs as plain text.
+                // Fallback 1: NSString object (e.g. Chrome/Notes sometimes)
                 if provider.canLoadObject(ofClass: NSString.self) {
                     _ = provider.loadObject(ofClass: NSString.self) { [weak self] object, error in
                         if let error {
                             shareLogger.error("Failed to load String object: \(String(describing: error), privacy: .public)")
-                            self?.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+                            // Continue to try other providers or fallback methods
+                        } else if let string = object as? String {
+                            // ICA/Kokaihop might share "Check this link: https://..."
+                            // Try to find a URL inside the string
+                            if let url = self?.extractURL(from: string) {
+                                self?.uploadURL(url)
+                                return
+                            }
+                            
+                            // If just a raw URL string
+                            if let url = URL(string: string), url.scheme != nil {
+                                self?.uploadURL(url)
+                                return
+                            }
+                        }
+                    }
+                }
+                
+                // Fallback 2: loadItem(forTypeIdentifier: "public.plain-text")
+                // This is needed for ICA app which fails on loadObject(ofClass: NSString.self)
+                if provider.hasItemConformingToTypeIdentifier("public.plain-text") {
+                    provider.loadItem(forTypeIdentifier: "public.plain-text") { [weak self] (item, error) in
+                        if let error {
+                            shareLogger.error("Failed to load plain-text item: \(String(describing: error), privacy: .public)")
                             return
                         }
-                        guard let string = object as? String, let url = URL(string: string) else {
-                            self?.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
-                            return
+                        
+                        var text: String?
+                        if let s = item as? String {
+                            text = s
+                        } else if let url = item as? URL {
+                            // Sometimes item is a file URL to a text file? Or just the text itself?
+                            // Try reading it? Or maybe it IS the web URL?
+                            text = url.absoluteString
                         }
-                        self?.uploadURL(url)
+                        
+                        if let text, let url = self?.extractURL(from: text) {
+                            self?.uploadURL(url)
+                        } else {
+                            // Final failure
+                            DispatchQueue.main.async {
+                                self?.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+                            }
+                        }
                     }
                     return
                 }
@@ -136,6 +172,12 @@ class ShareViewController: SLComposeServiceViewController {
         }
 
         return URL(string: "http://localhost:8000/api/")!
+    }
+    
+    private func extractURL(from text: String) -> URL? {
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        let matches = detector?.matches(in: text, options: [], range: NSRange(location: 0, length: text.utf16.count))
+        return matches?.first?.url
     }
     
     private func uploadURL(_ url: URL) {
@@ -254,9 +296,31 @@ class ShareViewController: SLComposeServiceViewController {
     }
 
     private static func stripAfterPipe(_ text: String) -> String {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let pipeIndex = t.firstIndex(of: "|") else { return t }
-        return t[..<pipeIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        // If the text contains a URL, remove the URL from the title display.
+        // We only want to show descriptive text here.
+        // E.g. "Check out this recipe https://ica.se/..." -> "Check out this recipe"
+        // Or if it's just a URL, maybe show empty?
+        
+        // Simple heuristic: if it looks like a URL, remove it.
+        // But let's keep the pipe logic first.
+        
+        var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let pipeIndex = t.firstIndex(of: "|") {
+            t = t[..<pipeIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        
+        // Remove URL if present in title
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            let range = NSRange(location: 0, length: t.utf16.count)
+            let matches = detector.matches(in: t, options: [], range: range)
+            for match in matches.reversed() {
+                if let r = Range(match.range, in: t) {
+                    t.removeSubrange(r)
+                }
+            }
+        }
+        
+        return t.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func loadSharedURLIfAvailable() {
@@ -282,22 +346,18 @@ class ShareViewController: SLComposeServiceViewController {
                     return
                 }
 
-                // Fallback: URL as text.
-                if provider.canLoadObject(ofClass: NSString.self) {
-                    _ = provider.loadObject(ofClass: NSString.self) { [weak self] object, error in
+                // Fallback: URL inside plain text
+                if provider.hasItemConformingToTypeIdentifier("public.plain-text") {
+                     provider.loadItem(forTypeIdentifier: "public.plain-text") { [weak self] (item, error) in
                         guard let self else { return }
-                        if let error {
-                            shareLogger.error("Failed to load String URL for category guess: \(String(describing: error), privacy: .public)")
-                            return
+                        if let s = item as? String, let url = self.extractURL(from: s) {
+                             DispatchQueue.main.async {
+                                self.sharedURL = url
+                                self.autoGuessDishTypeIfNeeded(title: self.textView.text, url: url)
+                            }
                         }
-                        guard let string = object as? String, let url = URL(string: string) else { return }
-
-                        DispatchQueue.main.async {
-                            self.sharedURL = url
-                            self.autoGuessDishTypeIfNeeded(title: self.textView.text, url: url)
-                        }
-                    }
-                    return
+                     }
+                     return
                 }
             }
         }

@@ -146,6 +146,15 @@ def _normalize_url(url: str) -> str:
         return ''
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
+    
+    # Special handling for ICA app links: ?recipeid=XXXXXX
+    # Redirects to /recept/XXXXXX/ which then 301 redirects to the correct slug-URL.
+    if 'ica.se' in url and 'recipeid=' in url:
+        match = re.search(r'recipeid=(\d+)', url)
+        if match:
+             recipe_id = match.group(1)
+             return f"https://www.ica.se/recept/{recipe_id}/"
+
     return url
 
 
@@ -283,6 +292,19 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
         og_title = soup.find('meta', property='og:title')
         if og_title:
             title = clean_title(og_title.get('content', ''))
+    
+    # 4. Fallback for Kokaihop: ingredients from meta keywords
+    if not ingredients and 'kokaihop.se' in url:
+        meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
+        if meta_keywords:
+            content_str = meta_keywords.get('content', '')
+            # Filter out generic keywords
+            ignore_words = {'mat', 'recept', 'matrecept', 'receptbilder', 'hitta recept', 'kokaihop', 'kokaihop.se', title.lower()}
+            
+            raw_list = [w.strip() for w in content_str.split(',')]
+            for w in raw_list:
+                if w and w.lower() not in ignore_words:
+                    ingredients.append(w)
 
     # Final cleanup
     title = clean_title(title)
