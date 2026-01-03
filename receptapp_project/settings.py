@@ -61,6 +61,14 @@ SECURE_SSL_REDIRECT = not DEBUG
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 
+# Trust the X-Forwarded-Proto header from the proxy (Cloudflare/Nginx)
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    
+    # CSRF Trusted Origins (needed for Django 4.0+ when behind a proxy)
+    # Load from env var, e.g. CSRF_TRUSTED_ORIGINS=https://minarecept.enklagrejer.se,https://another.com
+    CSRF_TRUSTED_ORIGINS = [url.strip() for url in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if url.strip()]
+
 
 # Loggning: logga ej känslig data i produktion
 LOGGING = {
