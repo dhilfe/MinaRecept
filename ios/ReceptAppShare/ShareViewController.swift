@@ -6,12 +6,12 @@ import os
 private let shareLogger = Logger(subsystem: "se.receptapp.ios.share", category: "Share")
 
 private enum AppGroupConfig {
-    static let suiteName = "group.se.receptapp.ios"
+    static let suiteName = "group.se.enklagrejer.minarecept"
     static let tokenKey = "auth_token"
 }
 
 class ShareViewController: SLComposeServiceViewController {
-
+    
     private var selectedDishType: (id: String, name: String) = ("lunch_dinner", "Lunch/Middag")
     private var didAutoGuessDishType = false
     private var sharedURL: URL?

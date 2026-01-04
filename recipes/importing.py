@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import html
 from dataclasses import dataclass
 
 import requests
@@ -95,6 +96,19 @@ def extract_json_ld(soup: BeautifulSoup):
     return None
 
 
+def clean_text(text: str) -> str:
+    """Clean text from HTML entities, tags and whitespace."""
+    if not text:
+        return ""
+    # 1. Unescape HTML entities (&lt; -> <, &nbsp; -> space)
+    text = html.unescape(text)
+    # 2. Remove HTML tags
+    text = re.sub(r'<[^>]+>', '', text)
+    # 3. Collapse whitespace
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
 def flatten_instruction_texts(node) -> list[str]:
     """Flatten JSON-LD recipeInstructions into a list of step strings."""
     steps: list[str] = []
@@ -103,9 +117,7 @@ def flatten_instruction_texts(node) -> list[str]:
         if value is None:
             return
         if isinstance(value, str):
-            v = value.strip()
-            # Remove HTML tags if present (e.g. <p>)
-            v = re.sub(r'<[^>]+>', '', v)
+            v = clean_text(value)
             if v:
                 steps.append(v)
             return
@@ -190,7 +202,7 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
     soup = BeautifulSoup(content, 'html.parser')
 
     def clean_title(raw_title: str) -> str:
-        t = (raw_title or '').strip()
+        t = clean_text(raw_title)
         if not t:
             return ''
         # Often sites put " | Brand" at the end
@@ -221,14 +233,14 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
         if ld_title:
             title = ld_title
             
-        description = str(recipe_data.get('description') or '').strip()
+        description = clean_text(str(recipe_data.get('description') or ''))
 
         # Ingredients
         raw_ingredients = recipe_data.get('recipeIngredient', [])
         if isinstance(raw_ingredients, list):
-            ingredients = [str(i).strip() for i in raw_ingredients if str(i).strip()]
+            ingredients = [clean_text(str(i)) for i in raw_ingredients if str(i).strip()]
         elif isinstance(raw_ingredients, str):
-            ingredients = [raw_ingredients.strip()] if raw_ingredients.strip() else []
+            ingredients = [clean_text(raw_ingredients)] if raw_ingredients.strip() else []
 
         # Instructions
         raw_instructions = recipe_data.get('recipeInstructions', [])
@@ -311,7 +323,14 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
     if not title:
         title = 'Importerad länk'
 
-    description = (description or '').strip()
+    description = clean_text(description)
+    
+    # Specific cleanup for Mathem
+    if 'mathem' in url:
+        # Remove common Mathem boilerplates
+        description = description.replace("Det här receptet ingår i Mathems koncept", "")
+        # Remove any trailing junk if needed
+    
     if description:
         description = f"{description[:1000]}"
 

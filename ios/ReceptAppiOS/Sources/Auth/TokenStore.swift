@@ -8,7 +8,7 @@ protocol TokenStoring {
 }
 
 final class KeychainTokenStore: TokenStoring {
-    private let service = "se.receptapp.ios"
+    private let service = "se.enklagrejer.minarecept"
     private let account = "auth_token"
 
     func loadToken() -> String? {

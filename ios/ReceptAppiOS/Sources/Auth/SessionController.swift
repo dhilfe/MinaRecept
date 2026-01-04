@@ -4,7 +4,7 @@ import os
 private let sessionLogger = Logger(subsystem: "se.receptapp.ios", category: "Session")
 
 private enum AppGroupConfig {
-    static let suiteName = "group.se.receptapp.ios"
+    static let suiteName = "group.se.enklagrejer.minarecept"
     static let tokenKey = "auth_token"
 }
 
