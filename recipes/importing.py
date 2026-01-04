@@ -376,7 +376,17 @@ def _parse_coop_recipe_json(data: dict) -> ImportedRecipeData | None:
 
     # Steps
     steps: list[str] = []
-    raw_steps = data.get("instructions") or data.get("steps") or data.get("method") or data.get("recipeInstructions") or []
+    raw_steps = (
+        data.get("instructions")
+        or data.get("steps")
+        or data.get("method")
+        or data.get("recipeInstructions")
+        or data.get("cookingInstructions")
+        or data.get("cookingInstruction")
+        or data.get("directions")
+        or data.get("preparation")
+        or []
+    )
     if isinstance(raw_steps, str):
         s = clean_text(raw_steps)
         if s:
@@ -426,6 +436,8 @@ def _parse_coop_recipe_json(data: dict) -> ImportedRecipeData | None:
                 or part.get("steps")
                 or part.get("method")
                 or part.get("recipeInstructions")
+                or part.get("cookingInstructions")
+                or part.get("cookingInstruction")
             )
 
             # Fallback: scan any keys containing instruction/step/method
@@ -457,7 +469,16 @@ def _parse_coop_recipe_json(data: dict) -> ImportedRecipeData | None:
 
     # Coop may also deliver instructions in a separate top-level array linked to recipePartId
     if not steps:
-        for key in ("recipePartInstructions", "recipePartInstruction", "instructions", "instructionSteps", "preparationSteps"):
+        for key in (
+            "recipePartInstructions",
+            "recipePartInstruction",
+            "instructions",
+            "instructionSteps",
+            "preparationSteps",
+            "cookingInstructions",
+            "cookingInstruction",
+            "directions",
+        ):
             blob = data.get(key)
             if not blob:
                 continue
