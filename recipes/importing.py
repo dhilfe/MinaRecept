@@ -61,39 +61,79 @@ def parse_duration(duration_input: str | int | None) -> int:
 
 
 def extract_json_ld(soup: BeautifulSoup):
-    """Extract recipe data from JSON-LD."""
-    scripts = soup.find_all('script', type='application/ld+json')
+    """Extract best matching recipe data from JSON-LD.
+
+    Many sites (incl. Coop) wrap the Recipe inside other nodes (WebPage.mainEntity, @graph, etc),
+    or include multiple Recipe-like objects. We collect candidates recursively and pick the best one.
+    """
+
+    def is_recipe_type(t) -> bool:
+        if isinstance(t, str):
+            return "Recipe" in t
+        if isinstance(t, list):
+            return any(isinstance(x, str) and "Recipe" in x for x in t)
+        return False
+
+    def collect_recipe_candidates(obj) -> list[dict]:
+        out: list[dict] = []
+        if isinstance(obj, dict):
+            if is_recipe_type(obj.get("@type")):
+                out.append(obj)
+            for v in obj.values():
+                out.extend(collect_recipe_candidates(v))
+        elif isinstance(obj, list):
+            for item in obj:
+                out.extend(collect_recipe_candidates(item))
+        return out
+
+    def score_recipe(node: dict) -> int:
+        score = 0
+        if node.get("name"):
+            score += 3
+        if node.get("image"):
+            score += 2
+        ing = node.get("recipeIngredient")
+        if isinstance(ing, list):
+            score += min(len(ing), 10)
+        elif isinstance(ing, str) and ing.strip():
+            score += 2
+        instr = node.get("recipeInstructions")
+        if instr:
+            score += 5
+        if node.get("totalTime") or node.get("cookTime") or node.get("prepTime"):
+            score += 1
+        return score
+
+    scripts = soup.find_all("script", type="application/ld+json")
+    candidates: list[dict] = []
+
     for script in scripts:
         try:
-            if not script.string:
+            raw = script.string
+            if not raw:
                 continue
-            data = json.loads(script.string)
-            nodes = []
-            if isinstance(data, dict):
-                if '@graph' in data:
-                    nodes = data['@graph']
-                else:
-                    nodes = [data]
-            elif isinstance(data, list):
-                nodes = data
-
-            for node in nodes:
-                if not isinstance(node, dict):
-                    continue
-                node_type = node.get('@type')
-                
-                # Check for "Recipe" or ["Recipe", "SomethingElse"]
-                is_recipe = False
-                if isinstance(node_type, str) and 'Recipe' in node_type:
-                    is_recipe = True
-                elif isinstance(node_type, list) and 'Recipe' in node_type:
-                    is_recipe = True
-                
-                if is_recipe:
-                    return node
+            data = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             continue
-    return None
+
+        # Normalize to a list of roots
+        roots: list = []
+        if isinstance(data, dict):
+            roots = [data]
+            if isinstance(data.get("@graph"), list):
+                roots.extend(data["@graph"])
+        elif isinstance(data, list):
+            roots = data
+
+        for root in roots:
+            candidates.extend(collect_recipe_candidates(root))
+
+    if not candidates:
+        return None
+
+    # Pick the best candidate (highest score)
+    best = max(candidates, key=score_recipe)
+    return best
 
 
 def clean_text(text: str) -> str:
@@ -235,10 +275,25 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
             
         description = clean_text(str(recipe_data.get('description') or ''))
 
-        # Ingredients
+        # Ingredients (string | list[str] | list[dict])
         raw_ingredients = recipe_data.get('recipeIngredient', [])
         if isinstance(raw_ingredients, list):
-            ingredients = [clean_text(str(i)) for i in raw_ingredients if str(i).strip()]
+            parsed: list[str] = []
+            for item in raw_ingredients:
+                if isinstance(item, str):
+                    t = clean_text(item)
+                    if t:
+                        parsed.append(t)
+                elif isinstance(item, dict):
+                    # Some sites use {"text": "..."} or {"name": "..."}
+                    t = clean_text(str(item.get("text") or item.get("name") or item.get("value") or ""))
+                    if t:
+                        parsed.append(t)
+                else:
+                    t = clean_text(str(item))
+                    if t:
+                        parsed.append(t)
+            ingredients = parsed
         elif isinstance(raw_ingredients, str):
             ingredients = [clean_text(raw_ingredients)] if raw_ingredients.strip() else []
 
@@ -317,6 +372,43 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
             for w in raw_list:
                 if w and w.lower() not in ignore_words:
                     ingredients.append(w)
+
+    # 5. Generic HTML fallback for ingredients/steps (helps when JSON-LD is missing/blocked)
+    def _extract_list_after_heading(keywords: list[str], list_tag: str) -> list[str]:
+        # Find headings or strong labels containing any keyword, then grab the next list.
+        lowered = [k.lower() for k in keywords]
+        for el in soup.find_all(["h1", "h2", "h3", "h4", "strong", "p", "span", "div"]):
+            text = clean_text(el.get_text(" ", strip=True)).lower()
+            if not text:
+                continue
+            if not any(k in text for k in lowered):
+                continue
+            # Search next elements for a list
+            next_list = el.find_next(list_tag)
+            if next_list:
+                items = [clean_text(li.get_text(" ", strip=True)) for li in next_list.find_all("li")]
+                return [i for i in items if i]
+        return []
+
+    if not ingredients:
+        # Microdata fallback
+        micro = [clean_text(x.get_text(" ", strip=True)) for x in soup.select('[itemprop="recipeIngredient"]')]
+        micro = [m for m in micro if m]
+        if micro:
+            ingredients = micro
+        else:
+            ingredients = _extract_list_after_heading(["ingredienser", "det här behöver du", "du behöver"], "ul")
+
+    if not steps:
+        micro_steps = [clean_text(x.get_text(" ", strip=True)) for x in soup.select('[itemprop="recipeInstructions"]')]
+        micro_steps = [m for m in micro_steps if m]
+        if micro_steps:
+            steps = micro_steps
+        else:
+            steps = _extract_list_after_heading(["gör så här", "instruktioner", "så gör du"], "ol")
+            if not steps:
+                # sometimes steps are in ul
+                steps = _extract_list_after_heading(["gör så här", "instruktioner", "så gör du"], "ul")
 
     # Final cleanup
     title = clean_title(title)
