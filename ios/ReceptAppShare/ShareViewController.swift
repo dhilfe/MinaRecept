@@ -143,7 +143,7 @@ class ShareViewController: SLComposeServiceViewController {
 
     override func configurationItems() -> [Any]! {
         let categoryItem = SLComposeSheetConfigurationItem()
-        categoryItem?.title = "Kategori"
+        categoryItem?.title = "Kategori 🥧"
         categoryItem?.value = selectedDishType.name
         categoryItem?.tapHandler = { [weak self] in
             guard let self else { return }
@@ -449,7 +449,7 @@ final class DishTypeSelectionViewController: UITableViewController {
         self.selectedId = selectedId
         self.onSelect = onSelect
         super.init(style: .insetGrouped)
-        self.title = "Kategori"
+        self.title = "Kategori 🥧"
     }
 
     required init?(coder: NSCoder) {
