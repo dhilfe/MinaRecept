@@ -192,6 +192,146 @@ class ImportedRecipeData:
     image_url: str | None = None
 
 
+def _extract_coop_recipe_id(html_bytes: bytes) -> str | None:
+    """Best-effort: extract Coop recipe id from the HTML.
+
+    Coop pages are often client-rendered, but the initial HTML usually contains a recipe id
+    for analytics or bootstrapping.
+    """
+    try:
+        s = html_bytes.decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+
+    patterns = [
+        r'ep\.recipe_id\s*=\s*(\d+)',
+        r'ep\.recipe_id\s*=\s*"(\d+)"',
+        r'"recipe_id"\s*:\s*"(\d+)"',
+        r'"recipe_id"\s*:\s*(\d+)',
+        r'"recipeId"\s*:\s*"(\d+)"',
+        r'"recipeId"\s*:\s*(\d+)',
+        r'recipe[_-]?id\s*[:=]\s*"(\d+)"',
+        r'recipe[_-]?id\s*[:=]\s*(\d+)',
+    ]
+    for p in patterns:
+        m = re.search(p, s, re.IGNORECASE)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _fetch_coop_recipe_json(recipe_id: str, timeout: int = 15) -> dict | None:
+    """Fetch Coop recipe JSON via their public proxy API."""
+    api_url = f"https://proxy.api.coop.se/external/recipe/recipes/{recipe_id}?api-version=v1"
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        ),
+        "Origin": "https://www.coop.se",
+        "Referer": "https://www.coop.se/",
+    }
+    try:
+        resp = requests.get(api_url, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _parse_coop_recipe_json(data: dict) -> ImportedRecipeData | None:
+    """Parse Coop recipe JSON into our ImportedRecipeData structure (best-effort)."""
+    title = clean_text(str(data.get("name") or data.get("title") or data.get("recipeName") or ""))
+    if not title:
+        return None
+
+    description = clean_text(str(data.get("description") or data.get("summary") or data.get("preamble") or ""))
+
+    # Image
+    image_url: str | None = None
+    for k in ("imageUrl", "image_url", "heroImageUrl", "hero_image_url"):
+        v = data.get(k)
+        if isinstance(v, str) and v.strip():
+            image_url = v.strip()
+            break
+    if not image_url and isinstance(data.get("images"), list) and data["images"]:
+        first = data["images"][0]
+        if isinstance(first, dict):
+            image_url = (first.get("url") or first.get("src") or None)
+        elif isinstance(first, str):
+            image_url = first
+
+    # Time / servings
+    cooking_time = 0
+    for k in ("cookingTimeMinutes", "totalTimeMinutes", "totalTime", "cookTime", "prepTime"):
+        v = data.get(k)
+        if v:
+            cooking_time = max(cooking_time, parse_duration(v))
+    servings = 4
+    for k in ("servings", "portions", "portionCount", "recipeYield"):
+        v = data.get(k)
+        if isinstance(v, int):
+            servings = v
+            break
+        if isinstance(v, str):
+            m = re.search(r"(\d+)", v)
+            if m:
+                servings = int(m.group(1))
+                break
+
+    # Ingredients
+    ingredients: list[str] = []
+    raw_ing = data.get("ingredients") or data.get("recipeIngredients") or data.get("ingredientLines") or []
+    if isinstance(raw_ing, list):
+        for item in raw_ing:
+            if isinstance(item, str):
+                t = clean_text(item)
+                if t:
+                    ingredients.append(t)
+                continue
+            if isinstance(item, dict):
+                name = clean_text(str(item.get("name") or item.get("ingredient") or item.get("title") or ""))
+                amount = clean_text(str(item.get("amount") or item.get("quantity") or item.get("value") or ""))
+                unit = clean_text(str(item.get("unit") or item.get("unitName") or ""))
+                parts = [p for p in [amount, unit, name] if p]
+                line = " ".join(parts).strip()
+                if line:
+                    ingredients.append(line)
+
+    # Steps
+    steps: list[str] = []
+    raw_steps = data.get("instructions") or data.get("steps") or data.get("method") or data.get("recipeInstructions") or []
+    if isinstance(raw_steps, str):
+        s = clean_text(raw_steps)
+        if s:
+            steps = [s]
+    elif isinstance(raw_steps, list):
+        for item in raw_steps:
+            if isinstance(item, str):
+                t = clean_text(item)
+                if t:
+                    steps.append(t)
+            elif isinstance(item, dict):
+                t = clean_text(str(item.get("text") or item.get("description") or item.get("instruction") or ""))
+                if t:
+                    steps.append(t)
+
+    if cooking_time <= 0:
+        cooking_time = 30
+
+    return ImportedRecipeData(
+        title=title,
+        description=description,
+        ingredients=ingredients,
+        steps=steps,
+        cooking_time=cooking_time,
+        servings=servings,
+        image_url=image_url,
+    )
+
+
 def _normalize_url(url: str) -> str:
     url = (url or '').strip()
     if not url:
@@ -409,6 +549,15 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
             if not steps:
                 # sometimes steps are in ul
                 steps = _extract_list_after_heading(["gör så här", "instruktioner", "så gör du"], "ul")
+
+    # 6. Coop API fallback (Coop is often client-side rendered; HTML lacks recipe data)
+    if "coop.se" in url and (not ingredients and not steps):
+        recipe_id = _extract_coop_recipe_id(content)
+        if recipe_id:
+            coop_json = _fetch_coop_recipe_json(recipe_id)
+            coop_data = _parse_coop_recipe_json(coop_json or {}) if coop_json else None
+            if coop_data and (coop_data.ingredients or coop_data.steps):
+                return coop_data
 
     # Final cleanup
     title = clean_title(title)
