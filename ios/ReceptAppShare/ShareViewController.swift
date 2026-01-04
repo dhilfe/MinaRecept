@@ -108,34 +108,37 @@ class ShareViewController: SLComposeServiceViewController {
                     }
                 }
                 
-                // Fallback 2: loadItem(forTypeIdentifier: "public.plain-text")
-                // This is needed for ICA app which fails on loadObject(ofClass: NSString.self)
-                if provider.hasItemConformingToTypeIdentifier("public.plain-text") {
-                    provider.loadItem(forTypeIdentifier: "public.plain-text") { [weak self] (item, error) in
-                        if let error {
-                            shareLogger.error("Failed to load plain-text item: \(String(describing: error), privacy: .public)")
-                            return
-                        }
-                        
-                        var text: String?
-                        if let s = item as? String {
-                            text = s
-                        } else if let url = item as? URL {
-                            // Sometimes item is a file URL to a text file? Or just the text itself?
-                            // Try reading it? Or maybe it IS the web URL?
-                            text = url.absoluteString
-                        }
-                        
-                        if let text, let url = self?.extractURL(from: text) {
-                            self?.uploadURL(url)
-                        } else {
-                            // Final failure
-                            DispatchQueue.main.async {
-                                self?.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+                // Fallback 2: loadItem for text-like UTIs (ICA/HelloFresh/etc. often share as text)
+                let textTypeIdentifiers = [
+                    UTType.plainText.identifier,
+                    UTType.utf8PlainText.identifier,
+                    UTType.text.identifier,
+                ]
+
+                for typeId in textTypeIdentifiers {
+                    if provider.hasItemConformingToTypeIdentifier(typeId) {
+                        provider.loadItem(forTypeIdentifier: typeId) { [weak self] (item, error) in
+                            guard let self else { return }
+                            if let error {
+                                shareLogger.error("Failed to load text item (\(typeId, privacy: .public)): \(String(describing: error), privacy: .public)")
+                                DispatchQueue.main.async {
+                                    self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
+                                }
+                                return
+                            }
+
+                            let text = self.coerceText(from: item)
+                            if let text, let url = self.extractURL(from: text) {
+                                self.uploadURL(url)
+                            } else {
+                                shareLogger.error("No URL found in shared text (\(typeId, privacy: .public)).")
+                                DispatchQueue.main.async {
+                                    self.showEphemeralNoticeAndComplete(message: "Ingen länk hittades")
+                                }
                             }
                         }
+                        return
                     }
-                    return
                 }
             }
         }
@@ -178,6 +181,32 @@ class ShareViewController: SLComposeServiceViewController {
         let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
         let matches = detector?.matches(in: text, options: [], range: NSRange(location: 0, length: text.utf16.count))
         return matches?.first?.url
+    }
+
+    private func coerceText(from item: NSSecureCoding?) -> String? {
+        if item == nil { return nil }
+
+        if let s = item as? String {
+            return s
+        }
+        if let a = item as? NSAttributedString {
+            return a.string
+        }
+        if let data = item as? Data {
+            // Try UTF-8 first, then UTF-16
+            if let s = String(data: data, encoding: .utf8) { return s }
+            if let s = String(data: data, encoding: .utf16) { return s }
+            return nil
+        }
+        if let url = item as? URL {
+            // Could be a file URL pointing to a text file
+            if url.isFileURL, let data = try? Data(contentsOf: url), data.count < 200_000 {
+                if let s = String(data: data, encoding: .utf8) { return s }
+                if let s = String(data: data, encoding: .utf16) { return s }
+            }
+            return url.absoluteString
+        }
+        return nil
     }
     
     private func uploadURL(_ url: URL) {
