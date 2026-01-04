@@ -371,8 +371,8 @@ class ShareViewController: SLComposeServiceViewController {
             label.bottomAnchor.constraint(equalTo: container.layoutMarginsGuide.bottomAnchor),
         ])
 
-        // Auto-dismiss quickly.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+        // Auto-dismiss (a bit longer so it's actually noticeable).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             container.removeFromSuperview()
             self.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
         }
