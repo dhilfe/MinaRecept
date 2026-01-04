@@ -13,28 +13,29 @@ targets:
       - path: ReceptAppiOS/Resources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: se.receptapp.ios
+        PRODUCT_BUNDLE_IDENTIFIER: se.enklagrejer.minarecept
         MARKETING_VERSION: 1.0.0
-        CURRENT_PROJECT_VERSION: 1
+        CURRENT_PROJECT_VERSION: 2
         CODE_SIGN_ENTITLEMENTS: ReceptAppiOS/ReceptAppiOS.entitlements
         INFOPLIST_KEY_CFBundleDisplayName: MinaRecept
-        INFOPLIST_KEY_API_BASE_URL: https://api.receptapp.se/api/
+        INFOPLIST_KEY_API_BASE_URL: https://minarecept.enklagrejer.se/api/
       configs:
         Release:
-          INFOPLIST_KEY_API_BASE_URL: https://api.receptapp.se/api/
+          INFOPLIST_KEY_API_BASE_URL: https://minarecept.enklagrejer.se/api/
           APP_GROUPS:
-            - group.se.receptapp.ios
+            - group.se.enklagrejer.minarecept
         Debug:
-          INFOPLIST_KEY_API_BASE_URL: http://127.0.0.1:8000/api/
+          #INFOPLIST_KEY_API_BASE_URL: http://127.0.0.1:8000/api/
+          INFOPLIST_KEY_API_BASE_URL: http://192.168.123.239:8000/api/
           CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: YES
           APP_GROUPS:
-            - group.se.receptapp.ios
+            - group.se.enklagrejer.minarecept
     info:
       path: ReceptAppiOS/Resources/Info.plist
       properties:
         API_BASE_URL: $(INFOPLIST_KEY_API_BASE_URL)
         CFBundleURLTypes:
-          - CFBundleURLName: se.receptapp.ios
+          - CFBundleURLName: se.enklagrejer.minarecept
             CFBundleURLSchemes:
               - receptapp
         NSAppTransportSecurity:
@@ -57,22 +58,23 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: NO
-        PRODUCT_BUNDLE_IDENTIFIER: se.receptapp.ios.share
+        PRODUCT_BUNDLE_IDENTIFIER: se.enklagrejer.minarecept.share
         MARKETING_VERSION: 1.0.0
-        CURRENT_PROJECT_VERSION: 1
+        CURRENT_PROJECT_VERSION: 2
         CODE_SIGN_ENTITLEMENTS: ReceptAppShare/ReceptAppShare.entitlements
         INFOPLIST_KEY_CFBundleDisplayName: MinaRecept Share
-        INFOPLIST_KEY_API_BASE_URL: https://api.receptapp.se/api/
+        INFOPLIST_KEY_API_BASE_URL: https://minarecept.enklagrejer.se/api/
       configs:
         Release:
-          INFOPLIST_KEY_API_BASE_URL: https://api.receptapp.se/api/
+          INFOPLIST_KEY_API_BASE_URL: https://minarecept.enklagrejer.se/api/
           APP_GROUPS:
-            - group.se.receptapp.ios
+            - group.se.enklagrejer.minarecept
         Debug:
-          INFOPLIST_KEY_API_BASE_URL: http://127.0.0.1:8000/api/
+          #INFOPLIST_KEY_API_BASE_URL: http://127.0.0.1:8000/api/
+          INFOPLIST_KEY_API_BASE_URL: http://192.168.123.239:8000/api/
           CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: YES
           APP_GROUPS:
-            - group.se.receptapp.ios
+            - group.se.enklagrejer.minarecept
     info:
       path: ReceptAppShare/Info.plist
       properties:
@@ -111,7 +113,7 @@ targets:
       - target: ReceptAppiOS
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: se.receptapp.ios.tests
+        PRODUCT_BUNDLE_IDENTIFIER: se.enklagrejer.minarecept.tests
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/ReceptAppiOS.app/ReceptAppiOS"
         ENABLE_TESTING_SEARCH_PATHS: YES
         GENERATE_INFOPLIST_FILE: YES
@@ -125,6 +127,6 @@ targets:
       - target: ReceptAppShare
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: se.receptapp.ios.sharetests
+        PRODUCT_BUNDLE_IDENTIFIER: se.enklagrejer.minarecept.sharetests
         ENABLE_TESTING_SEARCH_PATHS: YES
         GENERATE_INFOPLIST_FILE: YES
