@@ -3,7 +3,7 @@ import Social
 import UniformTypeIdentifiers
 import os
 
-private let shareLogger = Logger(subsystem: "se.receptapp.ios.share", category: "Share")
+private let shareLogger = Logger(subsystem: "se.enklagrejer.minarecept.share", category: "Share")
 
 private enum AppGroupConfig {
     static let suiteName = "group.se.enklagrejer.minarecept"
@@ -143,7 +143,7 @@ class ShareViewController: SLComposeServiceViewController {
 
     override func configurationItems() -> [Any]! {
         let categoryItem = SLComposeSheetConfigurationItem()
-        categoryItem?.title = "Kategori"
+        categoryItem?.title = "Kategori 🥧"
         categoryItem?.value = selectedDishType.name
         categoryItem?.tapHandler = { [weak self] in
             guard let self else { return }
@@ -194,8 +194,9 @@ class ShareViewController: SLComposeServiceViewController {
             shareLogger.error("[DEBUG] Missing shared token (App Groups). Cannot import from Share Extension.")
             let allKeys = sharedDefaults?.dictionaryRepresentation().keys.joined(separator: ", ") ?? "(no keys)"
             shareLogger.error("[DEBUG] App Group UserDefaults keys: \(allKeys)")
+            // Fallback: open the main app and let it import using its own auth.
             DispatchQueue.main.async {
-                self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
+                self.openMainAppForImport(url)
             }
             return
         }
@@ -221,7 +222,8 @@ class ShareViewController: SLComposeServiceViewController {
                 }
 
                 DispatchQueue.main.async {
-                    self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
+                    // Fallback: open app, let user retry/import there.
+                    self.openMainAppForImport(url)
                 }
                 return
             }
@@ -243,17 +245,36 @@ class ShareViewController: SLComposeServiceViewController {
                     shareLogger.error("Import failed with HTTP \(httpResponse.statusCode)")
 
                     DispatchQueue.main.async {
-                        self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
+                        // Fallback: open app, where we can show better errors and retry.
+                        self.openMainAppForImport(url)
                     }
                     return
                 }
             }
 
             DispatchQueue.main.async {
-                self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
+                self.openMainAppForImport(url)
             }
         }
         task.resume()
+    }
+
+    private func openMainAppForImport(_ url: URL) {
+        // Open the main app via URL scheme and let it perform the import (it has Keychain auth).
+        var components = URLComponents()
+        components.scheme = "receptapp"
+        components.host = "import"
+        components.queryItems = [URLQueryItem(name: "url", value: url.absoluteString)]
+        guard let deepLink = components.url else {
+            self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
+            return
+        }
+
+        shareLogger.info("Falling back to open main app for import: \(deepLink.absoluteString, privacy: .public)")
+        self.extensionContext?.open(deepLink, completionHandler: { _ in
+            // Even if open fails, just close the extension to avoid hanging.
+            self.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+        })
     }
 
     private func showEphemeralNoticeAndComplete(message: String) {
@@ -449,7 +470,7 @@ final class DishTypeSelectionViewController: UITableViewController {
         self.selectedId = selectedId
         self.onSelect = onSelect
         super.init(style: .insetGrouped)
-        self.title = "Kategori"
+        self.title = "Kategori 🥧"
     }
 
     required init?(coder: NSCoder) {

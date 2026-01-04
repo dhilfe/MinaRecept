@@ -50,12 +50,12 @@ struct RecipeListView: View {
             VStack(spacing: 0) {
                 categoryFilterBar
 
-                if recipes.isEmpty && !isLoading && searchText.isEmpty {
+                if recipes.isEmpty && !isLoading && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     EmptyStateView(
                         iconName: "fork.knife",
                         title: "Inga recept än",
                         message: "Spara dina favoritrecept från webben genom att dela dem till MinaRecept.",
-                        actionTitle: nil, // Dölj knapp om vi inte har en bra guide-länk
+                        actionTitle: nil,
                         action: nil
                     )
                 } else {
@@ -112,17 +112,16 @@ struct RecipeListView: View {
                                     }
                                 }
                             }
+                        }
 
-                            // Show Google search option even if we have results, if searching
-                            if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                Section {
-                                    Button("Sök på Google efter \"\(searchText)\"") {
-                                        openGoogleSearch(query: searchText)
-                                    }
-                                    .foregroundStyle(.blue)
-                                } header: {
-                                    Text("Hittade du inte det du sökte?")
+                        // Always offer Google search when user has typed something, even if we have local matches.
+                        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Section {
+                                Button("Sök på Google efter \"\(searchText)\"") {
+                                    openGoogleSearch(query: searchText)
                                 }
+                            } header: {
+                                Text("Hittade du inte det du sökte?")
                             }
                         }
                     }
