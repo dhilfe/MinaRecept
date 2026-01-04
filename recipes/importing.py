@@ -292,24 +292,46 @@ def _parse_coop_recipe_json(data: dict) -> ImportedRecipeData | None:
                 servings = int(m.group(1))
                 break
 
-    # Ingredients
-    ingredients: list[str] = []
-    raw_ing = data.get("ingredients") or data.get("recipeIngredients") or data.get("ingredientLines") or []
-    if isinstance(raw_ing, list):
-        for item in raw_ing:
+    def _parse_ingredient_list(raw) -> list[str]:
+        out: list[str] = []
+        if not isinstance(raw, list):
+            return out
+        for item in raw:
             if isinstance(item, str):
                 t = clean_text(item)
                 if t:
-                    ingredients.append(t)
+                    out.append(t)
                 continue
             if isinstance(item, dict):
-                name = clean_text(str(item.get("name") or item.get("ingredient") or item.get("title") or ""))
+                # Common shapes:
+                # { "name": "...", "amount": "...", "unit": "..." }
+                # { "ingredient": { "name": "..." }, "quantity": "...", "unit": "..." }
+                ing_obj = item.get("ingredient") if isinstance(item.get("ingredient"), dict) else None
+                name = clean_text(str(item.get("name") or item.get("title") or (ing_obj.get("name") if ing_obj else "") or ""))
                 amount = clean_text(str(item.get("amount") or item.get("quantity") or item.get("value") or ""))
                 unit = clean_text(str(item.get("unit") or item.get("unitName") or ""))
                 parts = [p for p in [amount, unit, name] if p]
                 line = " ".join(parts).strip()
                 if line:
-                    ingredients.append(line)
+                    out.append(line)
+                continue
+            t = clean_text(str(item))
+            if t:
+                out.append(t)
+        return out
+
+    # Ingredients
+    ingredients: list[str] = []
+    raw_ing = data.get("ingredients") or data.get("recipeIngredients") or data.get("ingredientLines") or []
+    ingredients = _parse_ingredient_list(raw_ing)
+
+    # Coop sometimes stores ingredients per "recipe part" keys like "recipePart-0-ingredients"
+    if not ingredients:
+        for k, v in data.items():
+            if isinstance(k, str) and "recipepart-" in k.lower() and "ingredients" in k.lower():
+                ingredients = _parse_ingredient_list(v)
+                if ingredients:
+                    break
 
     # Steps
     steps: list[str] = []
@@ -328,6 +350,29 @@ def _parse_coop_recipe_json(data: dict) -> ImportedRecipeData | None:
                 t = clean_text(str(item.get("text") or item.get("description") or item.get("instruction") or ""))
                 if t:
                     steps.append(t)
+
+    # Coop sometimes stores steps per "recipe part" keys too, e.g. "recipePart-0-instructions"
+    if not steps:
+        for k, v in data.items():
+            if not (isinstance(k, str) and "recipepart-" in k.lower()):
+                continue
+            if "instructions" in k.lower() or "steps" in k.lower() or "method" in k.lower():
+                if isinstance(v, list):
+                    for item in v:
+                        if isinstance(item, str):
+                            t = clean_text(item)
+                            if t:
+                                steps.append(t)
+                        elif isinstance(item, dict):
+                            t = clean_text(str(item.get("text") or item.get("description") or item.get("instruction") or ""))
+                            if t:
+                                steps.append(t)
+                elif isinstance(v, str):
+                    t = clean_text(v)
+                    if t:
+                        steps.append(t)
+                if steps:
+                    break
 
     if cooking_time <= 0:
         cooking_time = 30
