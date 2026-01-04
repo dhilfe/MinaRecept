@@ -333,6 +333,30 @@ def _parse_coop_recipe_json(data: dict) -> ImportedRecipeData | None:
                 if ingredients:
                     break
 
+    # Coop can also store recipe parts as a list: recipePart: [{..., ingredients: [...]}, ...]
+    if not ingredients and isinstance(data.get("recipePart"), list):
+        for part in data.get("recipePart") or []:
+            if not isinstance(part, dict):
+                continue
+            part_ings = part.get("ingredients")
+            if isinstance(part_ings, list) and part_ings:
+                # ingredient objects often have: name, quantity, unit
+                for item in part_ings:
+                    if isinstance(item, dict):
+                        name = clean_text(str(item.get("name") or item.get("ingredientName") or ""))
+                        qty = clean_text(str(item.get("quantity") or item.get("amount") or ""))
+                        unit = clean_text(str(item.get("unit") or item.get("unitName") or ""))
+                        parts = [p for p in [qty, unit, name] if p]
+                        line = " ".join(parts).strip()
+                        if line:
+                            ingredients.append(line)
+                    elif isinstance(item, str):
+                        t = clean_text(item)
+                        if t:
+                            ingredients.append(t)
+            if ingredients:
+                break
+
     # Steps
     steps: list[str] = []
     raw_steps = data.get("instructions") or data.get("steps") or data.get("method") or data.get("recipeInstructions") or []
@@ -373,6 +397,34 @@ def _parse_coop_recipe_json(data: dict) -> ImportedRecipeData | None:
                         steps.append(t)
                 if steps:
                     break
+
+    # Coop can also store instructions within recipePart list objects
+    if not steps and isinstance(data.get("recipePart"), list):
+        for part in data.get("recipePart") or []:
+            if not isinstance(part, dict):
+                continue
+            part_steps = (
+                part.get("instructions")
+                or part.get("steps")
+                or part.get("method")
+                or part.get("recipeInstructions")
+            )
+            if isinstance(part_steps, str):
+                t = clean_text(part_steps)
+                if t:
+                    steps.append(t)
+            elif isinstance(part_steps, list):
+                for item in part_steps:
+                    if isinstance(item, str):
+                        t = clean_text(item)
+                        if t:
+                            steps.append(t)
+                    elif isinstance(item, dict):
+                        t = clean_text(str(item.get("text") or item.get("description") or item.get("instruction") or ""))
+                        if t:
+                            steps.append(t)
+            if steps:
+                break
 
     if cooking_time <= 0:
         cooking_time = 30
