@@ -101,7 +101,10 @@ targets:
                       $attachment,
                       ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.url" ||
                           ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.plain-text" ||
-                          ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.text"
+                          ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.text" ||
+                          ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.data" ||
+                          ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.html" ||
+                          ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.file-url"
                   ).@count >= 1
               ).@count >= 1
           NSExtensionPointIdentifier: com.apple.share-services

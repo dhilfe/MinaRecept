@@ -140,13 +140,46 @@ class ShareViewController: SLComposeServiceViewController {
                         return
                     }
                 }
+
+                // Fallback 3: attempt to load any URL/text/data UTI we got and extract a link from it.
+                for typeId in provider.registeredTypeIdentifiers {
+                    guard let ut = UTType(typeId) else { continue }
+                    let isCandidate = ut.conforms(to: .url) || ut.conforms(to: .text) || ut.conforms(to: .data)
+                    guard isCandidate else { continue }
+
+                    provider.loadItem(forTypeIdentifier: typeId) { [weak self] (item, error) in
+                        guard let self else { return }
+                        if let error {
+                            shareLogger.error("Failed to load item (\(typeId, privacy: .public)): \(String(describing: error), privacy: .public)")
+                            DispatchQueue.main.async {
+                                self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
+                            }
+                            return
+                        }
+
+                        let text = self.coerceText(from: item)
+                        if let text, let url = self.extractURL(from: text) {
+                            self.uploadURL(url)
+                        } else {
+                            DispatchQueue.main.async {
+                                self.showEphemeralNoticeAndComplete(message: "Ingen länk hittades")
+                            }
+                        }
+                    }
+                    return
+                }
             }
+        }
+
+        // If we got here, we didn't find any usable attachments.
+        DispatchQueue.main.async {
+            self.showEphemeralNoticeAndComplete(message: "Ingen länk hittades")
         }
     }
 
     override func configurationItems() -> [Any]! {
         let categoryItem = SLComposeSheetConfigurationItem()
-        categoryItem?.title = "Kategori 🥧"
+        categoryItem?.title = "Kategori"
         categoryItem?.value = selectedDishType.name
         categoryItem?.tapHandler = { [weak self] in
             guard let self else { return }
