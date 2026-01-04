@@ -1,0 +1,12 @@
+[Unit]
+Description=MinaRecept deploy from stage
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=bgp4
+WorkingDirectory=/home/bgp4/MinaRecept
+ExecStart=/home/bgp4/MinaRecept/scripts/deploy_stage.sh
+
+

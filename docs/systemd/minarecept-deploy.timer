@@ -1,0 +1,12 @@
+[Unit]
+Description=Run MinaRecept deploy periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=minarecept-deploy.service
+
+[Install]
+WantedBy=timers.target
+
+
