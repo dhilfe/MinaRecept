@@ -50,19 +50,17 @@ struct RecipeListView: View {
             VStack(spacing: 0) {
                 categoryFilterBar
 
-                if recipes.isEmpty && !isLoading {
+                if recipes.isEmpty && !isLoading && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     EmptyStateView(
                         iconName: "fork.knife",
                         title: "Inga recept än",
                         message: "Spara dina favoritrecept från webben genom att dela dem till MinaRecept.",
-                        actionTitle: "Hur gör man?",
-                        action: {
-                            openGoogleSearch(query: "recept")
-                        }
+                        actionTitle: nil,
+                        action: nil
                     )
                 } else {
                     List {
-                        if searchedRecipes.isEmpty && !recipes.isEmpty {
+                        if searchedRecipes.isEmpty {
                             Section {
                                 if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                     Text("Inga recept hittades.")
@@ -70,7 +68,7 @@ struct RecipeListView: View {
                                 } else {
                                     Text("Inga recept matchar \"\(searchText)\".")
                                         .foregroundStyle(.secondary)
-                                    Button("Sök på Google") {
+                                    Button("Sök på Google efter \"\(searchText)\"") {
                                         openGoogleSearch(query: searchText)
                                     }
                                 }
@@ -113,6 +111,17 @@ struct RecipeListView: View {
                                         deleteRecipes(in: sectionRecipes, at: offsets)
                                     }
                                 }
+                            }
+                        }
+
+                        // Always offer Google search when user has typed something, even if we have local matches.
+                        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Section {
+                                Button("Sök på Google efter \"\(searchText)\"") {
+                                    openGoogleSearch(query: searchText)
+                                }
+                            } header: {
+                                Text("Hittade du inte det du sökte?")
                             }
                         }
                     }

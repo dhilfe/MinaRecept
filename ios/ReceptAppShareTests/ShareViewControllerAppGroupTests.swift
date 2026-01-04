@@ -2,7 +2,7 @@ import XCTest
 @testable import ReceptAppShare
 
 class ShareViewControllerAppGroupTests: XCTestCase {
-    let suiteName = "group.se.receptapp.ios"
+    let suiteName = "group.se.enklagrejer.minarecept"
     let tokenKey = "auth_token"
     let testToken = "test_token_456"
 

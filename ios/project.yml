@@ -22,6 +22,7 @@ targets:
       configs:
         Release:
           INFOPLIST_KEY_API_BASE_URL: https://minarecept.enklagrejer.se/api/
+          CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: YES
           APP_GROUPS:
             - group.se.enklagrejer.minarecept
         Debug:
@@ -67,6 +68,7 @@ targets:
       configs:
         Release:
           INFOPLIST_KEY_API_BASE_URL: https://minarecept.enklagrejer.se/api/
+          CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: YES
           APP_GROUPS:
             - group.se.enklagrejer.minarecept
         Debug:
