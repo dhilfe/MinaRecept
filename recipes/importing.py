@@ -61,39 +61,79 @@ def parse_duration(duration_input: str | int | None) -> int:
 
 
 def extract_json_ld(soup: BeautifulSoup):
-    """Extract recipe data from JSON-LD."""
-    scripts = soup.find_all('script', type='application/ld+json')
+    """Extract best matching recipe data from JSON-LD.
+
+    Many sites (incl. Coop) wrap the Recipe inside other nodes (WebPage.mainEntity, @graph, etc),
+    or include multiple Recipe-like objects. We collect candidates recursively and pick the best one.
+    """
+
+    def is_recipe_type(t) -> bool:
+        if isinstance(t, str):
+            return "Recipe" in t
+        if isinstance(t, list):
+            return any(isinstance(x, str) and "Recipe" in x for x in t)
+        return False
+
+    def collect_recipe_candidates(obj) -> list[dict]:
+        out: list[dict] = []
+        if isinstance(obj, dict):
+            if is_recipe_type(obj.get("@type")):
+                out.append(obj)
+            for v in obj.values():
+                out.extend(collect_recipe_candidates(v))
+        elif isinstance(obj, list):
+            for item in obj:
+                out.extend(collect_recipe_candidates(item))
+        return out
+
+    def score_recipe(node: dict) -> int:
+        score = 0
+        if node.get("name"):
+            score += 3
+        if node.get("image"):
+            score += 2
+        ing = node.get("recipeIngredient")
+        if isinstance(ing, list):
+            score += min(len(ing), 10)
+        elif isinstance(ing, str) and ing.strip():
+            score += 2
+        instr = node.get("recipeInstructions")
+        if instr:
+            score += 5
+        if node.get("totalTime") or node.get("cookTime") or node.get("prepTime"):
+            score += 1
+        return score
+
+    scripts = soup.find_all("script", type="application/ld+json")
+    candidates: list[dict] = []
+
     for script in scripts:
         try:
-            if not script.string:
+            raw = script.string
+            if not raw:
                 continue
-            data = json.loads(script.string)
-            nodes = []
-            if isinstance(data, dict):
-                if '@graph' in data:
-                    nodes = data['@graph']
-                else:
-                    nodes = [data]
-            elif isinstance(data, list):
-                nodes = data
-
-            for node in nodes:
-                if not isinstance(node, dict):
-                    continue
-                node_type = node.get('@type')
-                
-                # Check for "Recipe" or ["Recipe", "SomethingElse"]
-                is_recipe = False
-                if isinstance(node_type, str) and 'Recipe' in node_type:
-                    is_recipe = True
-                elif isinstance(node_type, list) and 'Recipe' in node_type:
-                    is_recipe = True
-                
-                if is_recipe:
-                    return node
+            data = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             continue
-    return None
+
+        # Normalize to a list of roots
+        roots: list = []
+        if isinstance(data, dict):
+            roots = [data]
+            if isinstance(data.get("@graph"), list):
+                roots.extend(data["@graph"])
+        elif isinstance(data, list):
+            roots = data
+
+        for root in roots:
+            candidates.extend(collect_recipe_candidates(root))
+
+    if not candidates:
+        return None
+
+    # Pick the best candidate (highest score)
+    best = max(candidates, key=score_recipe)
+    return best
 
 
 def clean_text(text: str) -> str:
@@ -150,6 +190,327 @@ class ImportedRecipeData:
     cooking_time: int
     servings: int
     image_url: str | None = None
+
+
+def _extract_coop_recipe_id(html_bytes: bytes) -> str | None:
+    """Best-effort: extract Coop recipe id from the HTML.
+
+    Coop pages are often client-rendered, but the initial HTML usually contains a recipe id
+    for analytics or bootstrapping.
+    """
+    try:
+        s = html_bytes.decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+
+    patterns = [
+        # Common: analytics URL query param (e.g. ...&ep.recipe_id=5439115&...)
+        r'ep\.recipe_id=(\d+)',
+        # Sometimes URL-encoded
+        r'ep\.recipe_id%3D(\d+)',
+        # Assignment-style
+        r'ep\.recipe_id\s*=\s*(\d+)',
+        r'ep\.recipe_id\s*=\s*"(\d+)"',
+        r'"recipe_id"\s*:\s*"(\d+)"',
+        r'"recipe_id"\s*:\s*(\d+)',
+        r'"recipeId"\s*:\s*"(\d+)"',
+        r'"recipeId"\s*:\s*(\d+)',
+        r'recipe[_-]?id\s*[:=]\s*"(\d+)"',
+        r'recipe[_-]?id\s*[:=]\s*(\d+)',
+    ]
+    for p in patterns:
+        m = re.search(p, s, re.IGNORECASE)
+        if m:
+            return m.group(1)
+
+    # Last resort: look for "recipe_id" nearby and grab digits
+    # Handles cases like "recipe_id=5439115" inside long URLs or encoded blobs.
+    m2 = re.search(r"recipe[_\.]?id[^0-9]{0,20}(\d{4,12})", s, re.IGNORECASE)
+    if m2:
+        return m2.group(1)
+    return None
+
+
+def _fetch_coop_recipe_json(recipe_id: str, timeout: int = 15) -> dict | None:
+    """Fetch Coop recipe JSON via their public proxy API."""
+    api_url = f"https://proxy.api.coop.se/external/recipe/recipes/{recipe_id}?api-version=v1"
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        ),
+        "Origin": "https://www.coop.se",
+        "Referer": "https://www.coop.se/",
+    }
+    try:
+        resp = requests.get(api_url, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _parse_coop_recipe_json(data: dict) -> ImportedRecipeData | None:
+    """Parse Coop recipe JSON into our ImportedRecipeData structure (best-effort)."""
+    title = clean_text(str(data.get("name") or data.get("title") or data.get("recipeName") or ""))
+    if not title:
+        return None
+
+    description = clean_text(str(data.get("description") or data.get("summary") or data.get("preamble") or ""))
+
+    def _fmt_qty(value: object) -> str:
+        """Format Coop quantities like '8.0' -> '8' while keeping real decimals."""
+        if value is None:
+            return ""
+        if isinstance(value, (int,)):
+            return str(value)
+        if isinstance(value, float):
+            return str(int(value)) if value.is_integer() else str(value)
+        s = clean_text(str(value))
+        if not s:
+            return ""
+        # Common Coop format: "8.0"
+        m = re.fullmatch(r"(\d+)\.0+", s)
+        if m:
+            return m.group(1)
+        return s
+
+    # Image
+    image_url: str | None = None
+    for k in ("imageUrl", "image_url", "heroImageUrl", "hero_image_url"):
+        v = data.get(k)
+        if isinstance(v, str) and v.strip():
+            image_url = v.strip()
+            break
+    if not image_url and isinstance(data.get("images"), list) and data["images"]:
+        first = data["images"][0]
+        if isinstance(first, dict):
+            image_url = (first.get("url") or first.get("src") or None)
+        elif isinstance(first, str):
+            image_url = first
+
+    # Time / servings
+    cooking_time = 0
+    for k in ("cookingTimeMinutes", "totalTimeMinutes", "totalTime", "cookTime", "prepTime"):
+        v = data.get(k)
+        if v:
+            cooking_time = max(cooking_time, parse_duration(v))
+    servings = 4
+    for k in ("servings", "portions", "portionCount", "recipeYield"):
+        v = data.get(k)
+        if isinstance(v, int):
+            servings = v
+            break
+        if isinstance(v, str):
+            m = re.search(r"(\d+)", v)
+            if m:
+                servings = int(m.group(1))
+                break
+
+    def _parse_ingredient_list(raw) -> list[str]:
+        out: list[str] = []
+        if not isinstance(raw, list):
+            return out
+        for item in raw:
+            if isinstance(item, str):
+                t = clean_text(item)
+                if t:
+                    out.append(t)
+                continue
+            if isinstance(item, dict):
+                # Common shapes:
+                # { "name": "...", "amount": "...", "unit": "..." }
+                # { "ingredient": { "name": "..." }, "quantity": "...", "unit": "..." }
+                ing_obj = item.get("ingredient") if isinstance(item.get("ingredient"), dict) else None
+                name = clean_text(str(item.get("name") or item.get("title") or (ing_obj.get("name") if ing_obj else "") or ""))
+                amount = clean_text(str(item.get("amount") or item.get("quantity") or item.get("value") or ""))
+                unit = clean_text(str(item.get("unit") or item.get("unitName") or ""))
+                parts = [p for p in [amount, unit, name] if p]
+                line = " ".join(parts).strip()
+                if line:
+                    out.append(line)
+                continue
+            t = clean_text(str(item))
+            if t:
+                out.append(t)
+        return out
+
+    # Ingredients
+    ingredients: list[str] = []
+    raw_ing = data.get("ingredients") or data.get("recipeIngredients") or data.get("ingredientLines") or []
+    ingredients = _parse_ingredient_list(raw_ing)
+
+    # Coop sometimes stores ingredients per "recipe part" keys like "recipePart-0-ingredients"
+    if not ingredients:
+        for k, v in data.items():
+            if isinstance(k, str) and "recipepart-" in k.lower() and "ingredients" in k.lower():
+                ingredients = _parse_ingredient_list(v)
+                if ingredients:
+                    break
+
+    # Coop can also store recipe parts as a list: recipePart: [{..., ingredients: [...]}, ...]
+    if not ingredients and isinstance(data.get("recipePart"), list):
+        for part in data.get("recipePart") or []:
+            if not isinstance(part, dict):
+                continue
+            part_ings = part.get("ingredients")
+            if isinstance(part_ings, list) and part_ings:
+                # ingredient objects often have: name, quantity, unit
+                for item in part_ings:
+                    if isinstance(item, dict):
+                        name = clean_text(str(item.get("name") or item.get("ingredientName") or ""))
+                        qty = _fmt_qty(item.get("quantity") or item.get("amount"))
+                        unit = clean_text(str(item.get("unit") or item.get("unitName") or ""))
+                        parts = [p for p in [qty, unit, name] if p]
+                        line = " ".join(parts).strip()
+                        if line:
+                            ingredients.append(line)
+                    elif isinstance(item, str):
+                        t = clean_text(item)
+                        if t:
+                            ingredients.append(t)
+            if ingredients:
+                break
+
+    # Steps
+    steps: list[str] = []
+    raw_steps = (
+        data.get("instructions")
+        or data.get("steps")
+        or data.get("method")
+        or data.get("recipeInstructions")
+        or data.get("cookingInstructions")
+        or data.get("cookingInstruction")
+        or data.get("directions")
+        or data.get("preparation")
+        or []
+    )
+    if isinstance(raw_steps, str):
+        s = clean_text(raw_steps)
+        if s:
+            steps = [s]
+    elif isinstance(raw_steps, list):
+        for item in raw_steps:
+            if isinstance(item, str):
+                t = clean_text(item)
+                if t:
+                    steps.append(t)
+            elif isinstance(item, dict):
+                t = clean_text(str(item.get("text") or item.get("description") or item.get("instruction") or ""))
+                if t:
+                    steps.append(t)
+
+    # Coop sometimes stores steps per "recipe part" keys too, e.g. "recipePart-0-instructions"
+    if not steps:
+        for k, v in data.items():
+            if not (isinstance(k, str) and "recipepart-" in k.lower()):
+                continue
+            if "instructions" in k.lower() or "steps" in k.lower() or "method" in k.lower():
+                if isinstance(v, list):
+                    for item in v:
+                        if isinstance(item, str):
+                            t = clean_text(item)
+                            if t:
+                                steps.append(t)
+                        elif isinstance(item, dict):
+                            t = clean_text(str(item.get("text") or item.get("description") or item.get("instruction") or ""))
+                            if t:
+                                steps.append(t)
+                elif isinstance(v, str):
+                    t = clean_text(v)
+                    if t:
+                        steps.append(t)
+                if steps:
+                    break
+
+    # Coop can also store instructions within recipePart list objects
+    if not steps and isinstance(data.get("recipePart"), list):
+        for part in data.get("recipePart") or []:
+            if not isinstance(part, dict):
+                continue
+            # Try common keys first
+            part_steps = (
+                part.get("instructions")
+                or part.get("steps")
+                or part.get("method")
+                or part.get("recipeInstructions")
+                or part.get("cookingInstructions")
+                or part.get("cookingInstruction")
+            )
+
+            # Fallback: scan any keys containing instruction/step/method
+            if not part_steps:
+                for k, v in part.items():
+                    if not isinstance(k, str):
+                        continue
+                    lk = k.lower()
+                    if "instruction" in lk or "step" in lk or "method" in lk or "howto" in lk:
+                        part_steps = v
+                        break
+
+            if isinstance(part_steps, str):
+                t = clean_text(part_steps)
+                if t:
+                    steps.append(t)
+            elif isinstance(part_steps, list):
+                for item in part_steps:
+                    if isinstance(item, str):
+                        t = clean_text(item)
+                        if t:
+                            steps.append(t)
+                    elif isinstance(item, dict):
+                        t = clean_text(str(item.get("text") or item.get("description") or item.get("instruction") or ""))
+                        if t:
+                            steps.append(t)
+            if steps:
+                break
+
+    # Coop may also deliver instructions in a separate top-level array linked to recipePartId
+    if not steps:
+        for key in (
+            "recipePartInstructions",
+            "recipePartInstruction",
+            "instructions",
+            "instructionSteps",
+            "preparationSteps",
+            "cookingInstructions",
+            "cookingInstruction",
+            "directions",
+        ):
+            blob = data.get(key)
+            if not blob:
+                continue
+            if isinstance(blob, list):
+                for item in blob:
+                    if isinstance(item, str):
+                        t = clean_text(item)
+                        if t:
+                            steps.append(t)
+                    elif isinstance(item, dict):
+                        t = clean_text(str(item.get("text") or item.get("description") or item.get("instruction") or item.get("name") or ""))
+                        if t:
+                            steps.append(t)
+            elif isinstance(blob, str):
+                t = clean_text(blob)
+                if t:
+                    steps.append(t)
+            if steps:
+                break
+
+    if cooking_time <= 0:
+        cooking_time = 30
+
+    return ImportedRecipeData(
+        title=title,
+        description=description,
+        ingredients=ingredients,
+        steps=steps,
+        cooking_time=cooking_time,
+        servings=servings,
+        image_url=image_url,
+    )
 
 
 def _normalize_url(url: str) -> str:
@@ -235,10 +596,25 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
             
         description = clean_text(str(recipe_data.get('description') or ''))
 
-        # Ingredients
+        # Ingredients (string | list[str] | list[dict])
         raw_ingredients = recipe_data.get('recipeIngredient', [])
         if isinstance(raw_ingredients, list):
-            ingredients = [clean_text(str(i)) for i in raw_ingredients if str(i).strip()]
+            parsed: list[str] = []
+            for item in raw_ingredients:
+                if isinstance(item, str):
+                    t = clean_text(item)
+                    if t:
+                        parsed.append(t)
+                elif isinstance(item, dict):
+                    # Some sites use {"text": "..."} or {"name": "..."}
+                    t = clean_text(str(item.get("text") or item.get("name") or item.get("value") or ""))
+                    if t:
+                        parsed.append(t)
+                else:
+                    t = clean_text(str(item))
+                    if t:
+                        parsed.append(t)
+            ingredients = parsed
         elif isinstance(raw_ingredients, str):
             ingredients = [clean_text(raw_ingredients)] if raw_ingredients.strip() else []
 
@@ -317,6 +693,52 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
             for w in raw_list:
                 if w and w.lower() not in ignore_words:
                     ingredients.append(w)
+
+    # 5. Generic HTML fallback for ingredients/steps (helps when JSON-LD is missing/blocked)
+    def _extract_list_after_heading(keywords: list[str], list_tag: str) -> list[str]:
+        # Find headings or strong labels containing any keyword, then grab the next list.
+        lowered = [k.lower() for k in keywords]
+        for el in soup.find_all(["h1", "h2", "h3", "h4", "strong", "p", "span", "div"]):
+            text = clean_text(el.get_text(" ", strip=True)).lower()
+            if not text:
+                continue
+            if not any(k in text for k in lowered):
+                continue
+            # Search next elements for a list
+            next_list = el.find_next(list_tag)
+            if next_list:
+                items = [clean_text(li.get_text(" ", strip=True)) for li in next_list.find_all("li")]
+                return [i for i in items if i]
+        return []
+
+    if not ingredients:
+        # Microdata fallback
+        micro = [clean_text(x.get_text(" ", strip=True)) for x in soup.select('[itemprop="recipeIngredient"]')]
+        micro = [m for m in micro if m]
+        if micro:
+            ingredients = micro
+        else:
+            ingredients = _extract_list_after_heading(["ingredienser", "det här behöver du", "du behöver"], "ul")
+
+    if not steps:
+        micro_steps = [clean_text(x.get_text(" ", strip=True)) for x in soup.select('[itemprop="recipeInstructions"]')]
+        micro_steps = [m for m in micro_steps if m]
+        if micro_steps:
+            steps = micro_steps
+        else:
+            steps = _extract_list_after_heading(["gör så här", "instruktioner", "så gör du"], "ol")
+            if not steps:
+                # sometimes steps are in ul
+                steps = _extract_list_after_heading(["gör så här", "instruktioner", "så gör du"], "ul")
+
+    # 6. Coop API fallback (Coop is often client-side rendered; HTML lacks recipe data)
+    if "coop.se" in url and (not ingredients and not steps):
+        recipe_id = _extract_coop_recipe_id(content)
+        if recipe_id:
+            coop_json = _fetch_coop_recipe_json(recipe_id)
+            coop_data = _parse_coop_recipe_json(coop_json or {}) if coop_json else None
+            if coop_data and (coop_data.ingredients or coop_data.steps):
+                return coop_data
 
     # Final cleanup
     title = clean_title(title)
