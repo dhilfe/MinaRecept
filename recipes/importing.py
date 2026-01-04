@@ -204,6 +204,11 @@ def _extract_coop_recipe_id(html_bytes: bytes) -> str | None:
         return None
 
     patterns = [
+        # Common: analytics URL query param (e.g. ...&ep.recipe_id=5439115&...)
+        r'ep\.recipe_id=(\d+)',
+        # Sometimes URL-encoded
+        r'ep\.recipe_id%3D(\d+)',
+        # Assignment-style
         r'ep\.recipe_id\s*=\s*(\d+)',
         r'ep\.recipe_id\s*=\s*"(\d+)"',
         r'"recipe_id"\s*:\s*"(\d+)"',
@@ -217,6 +222,12 @@ def _extract_coop_recipe_id(html_bytes: bytes) -> str | None:
         m = re.search(p, s, re.IGNORECASE)
         if m:
             return m.group(1)
+
+    # Last resort: look for "recipe_id" nearby and grab digits
+    # Handles cases like "recipe_id=5439115" inside long URLs or encoded blobs.
+    m2 = re.search(r"recipe[_\.]?id[^0-9]{0,20}(\d{4,12})", s, re.IGNORECASE)
+    if m2:
+        return m2.group(1)
     return None
 
 
