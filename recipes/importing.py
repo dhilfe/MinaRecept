@@ -260,6 +260,23 @@ def _parse_coop_recipe_json(data: dict) -> ImportedRecipeData | None:
 
     description = clean_text(str(data.get("description") or data.get("summary") or data.get("preamble") or ""))
 
+    def _fmt_qty(value: object) -> str:
+        """Format Coop quantities like '8.0' -> '8' while keeping real decimals."""
+        if value is None:
+            return ""
+        if isinstance(value, (int,)):
+            return str(value)
+        if isinstance(value, float):
+            return str(int(value)) if value.is_integer() else str(value)
+        s = clean_text(str(value))
+        if not s:
+            return ""
+        # Common Coop format: "8.0"
+        m = re.fullmatch(r"(\d+)\.0+", s)
+        if m:
+            return m.group(1)
+        return s
+
     # Image
     image_url: str | None = None
     for k in ("imageUrl", "image_url", "heroImageUrl", "hero_image_url"):
@@ -344,7 +361,7 @@ def _parse_coop_recipe_json(data: dict) -> ImportedRecipeData | None:
                 for item in part_ings:
                     if isinstance(item, dict):
                         name = clean_text(str(item.get("name") or item.get("ingredientName") or ""))
-                        qty = clean_text(str(item.get("quantity") or item.get("amount") or ""))
+                        qty = _fmt_qty(item.get("quantity") or item.get("amount"))
                         unit = clean_text(str(item.get("unit") or item.get("unitName") or ""))
                         parts = [p for p in [qty, unit, name] if p]
                         line = " ".join(parts).strip()
@@ -403,12 +420,24 @@ def _parse_coop_recipe_json(data: dict) -> ImportedRecipeData | None:
         for part in data.get("recipePart") or []:
             if not isinstance(part, dict):
                 continue
+            # Try common keys first
             part_steps = (
                 part.get("instructions")
                 or part.get("steps")
                 or part.get("method")
                 or part.get("recipeInstructions")
             )
+
+            # Fallback: scan any keys containing instruction/step/method
+            if not part_steps:
+                for k, v in part.items():
+                    if not isinstance(k, str):
+                        continue
+                    lk = k.lower()
+                    if "instruction" in lk or "step" in lk or "method" in lk or "howto" in lk:
+                        part_steps = v
+                        break
+
             if isinstance(part_steps, str):
                 t = clean_text(part_steps)
                 if t:
@@ -423,6 +452,29 @@ def _parse_coop_recipe_json(data: dict) -> ImportedRecipeData | None:
                         t = clean_text(str(item.get("text") or item.get("description") or item.get("instruction") or ""))
                         if t:
                             steps.append(t)
+            if steps:
+                break
+
+    # Coop may also deliver instructions in a separate top-level array linked to recipePartId
+    if not steps:
+        for key in ("recipePartInstructions", "recipePartInstruction", "instructions", "instructionSteps", "preparationSteps"):
+            blob = data.get(key)
+            if not blob:
+                continue
+            if isinstance(blob, list):
+                for item in blob:
+                    if isinstance(item, str):
+                        t = clean_text(item)
+                        if t:
+                            steps.append(t)
+                    elif isinstance(item, dict):
+                        t = clean_text(str(item.get("text") or item.get("description") or item.get("instruction") or item.get("name") or ""))
+                        if t:
+                            steps.append(t)
+            elif isinstance(blob, str):
+                t = clean_text(blob)
+                if t:
+                    steps.append(t)
             if steps:
                 break
 
