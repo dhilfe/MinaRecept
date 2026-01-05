@@ -879,12 +879,42 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
                         title = possible
                         break
 
+        unit_words = [
+            "kg", "g", "mg",
+            "l", "dl", "cl", "ml",
+            "msk", "tsk", "krm",
+            "st", "styck", "stycken",
+            "port", "portion", "portioner",
+        ]
+        unit_re = re.compile(rf"\b(?:{'|'.join(map(re.escape, unit_words))})\b", re.IGNORECASE)
+
+        bad_snippets = [
+            "receptgeneratorn",
+            "hitta recept efter ingrediens",
+            "mina sparade recept",
+            "om landleys",
+        ]
+
         def looks_like_nav(lines: list[str]) -> bool:
             if not lines:
                 return False
-            # Nav/menu items typically have no quantities.
-            digits = sum(1 for x in lines if re.search(r"\d", x))
-            return digits == 0
+            joined = " ".join(lines).lower()
+            if any(b in joined for b in bad_snippets):
+                return True
+
+            # Ingredient lists usually contain units (dl, msk, g...) in multiple lines.
+            unit_hits = sum(1 for x in lines if unit_re.search(x or ""))
+            digit_hits = sum(1 for x in lines if re.search(r"\d", x or ""))
+
+            # A nav/menu list might contain "2.0" etc but no real units.
+            if unit_hits == 0:
+                return True
+
+            # If we have units but almost no digits, it's suspicious too.
+            if digit_hits == 0:
+                return True
+
+            return False
 
         def choose_best_ingredient_list(root) -> list[str]:
             candidates: list[list[str]] = []
@@ -894,16 +924,29 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
                 if len(items) < 3:
                     continue
                 # Heuristic: ingredient lists usually contain digits/units in many lines.
-                score = sum(1 for x in items if re.search(r"\d", x))
-                if score == 0:
+                # Reject obvious nav lists.
+                if looks_like_nav(items):
                     continue
+
+                digit_score = sum(1 for x in items if re.search(r"\d", x))
+                unit_score = sum(1 for x in items if unit_re.search(x or ""))
+                if digit_score == 0 or unit_score == 0:
+                    continue
+                score = digit_score + unit_score
                 candidates.append(items)
 
             if not candidates:
                 return []
 
             # Choose the list with highest "digit-line" count.
-            candidates.sort(key=lambda lst: sum(1 for x in lst if re.search(r"\d", x)), reverse=True)
+            candidates.sort(
+                key=lambda lst: (
+                    sum(1 for x in lst if unit_re.search(x or "")),
+                    sum(1 for x in lst if re.search(r"\d", x or "")),
+                    len(lst),
+                ),
+                reverse=True,
+            )
             best = candidates[0]
             return best
 
@@ -911,22 +954,6 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
             """
             Landleys sometimes uses checkbox-style markup, not <li>. Extract ingredient-like lines by pattern.
             """
-            unit_words = [
-                "kg", "g", "mg",
-                "l", "dl", "cl", "ml",
-                "msk", "tsk", "krm",
-                "st", "styck", "stycken",
-                "port", "portion", "portioner",
-            ]
-            unit_re = re.compile(rf"\b(?:{'|'.join(map(re.escape, unit_words))})\b", re.IGNORECASE)
-
-            bad_snippets = [
-                "receptgeneratorn",
-                "hitta recept efter ingrediens",
-                "mina sparade recept",
-                "om landleys",
-            ]
-
             out: list[str] = []
             for el in root.find_all(["label", "li", "p", "span", "div"]):
                 t = clean_text(el.get_text(" ", strip=True))
