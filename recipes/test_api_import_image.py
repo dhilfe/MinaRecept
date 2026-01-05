@@ -1,0 +1,45 @@
+from io import BytesIO
+from unittest.mock import patch
+
+from django.contrib.auth.models import User
+from django.test import TestCase
+from rest_framework.test import APIClient
+
+
+class ImportImageAPITests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="imguser", password="password")
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    @patch("recipes.api_views.ImageRecipeParser")
+    def test_import_image_creates_recipe(self, mock_parser_cls):
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {
+            "title": "OCR Test",
+            "description": "Beskrivning",
+            "ingredients": "1 st Ägg\n2 dl Mjöl",
+            "steps": "1. Gör\n2. Klar",
+            "cooking_time": 12,
+            "servings": 3,
+        }
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "dish_type": "dessert"},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(data["title"], "OCR Test")
+        self.assertEqual(data["dish_type"], "dessert")
+
+    def test_import_image_missing_image_returns_400(self):
+        resp = self.client.post("/api/recipes/import-image/", data={}, format="multipart")
+        self.assertEqual(resp.status_code, 400)
+
+

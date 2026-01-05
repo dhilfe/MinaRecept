@@ -179,6 +179,10 @@ class ShareViewController: SLComposeServiceViewController {
                         if let url = self.extractURL(fromItem: item) ?? self.extractURL(from: self.contentText) {
                             self.uploadURL(url)
                         } else {
+                            if let image = item as? UIImage {
+                                self.uploadImage(image)
+                                return
+                            }
                             let cls = item.map { String(describing: type(of: $0)) } ?? "nil"
                             shareLogger.error("No URL found in shared item (\(typeId, privacy: .public)). itemClass=\(cls, privacy: .public) contentTextLen=\(self.contentText.count)")
                             DispatchQueue.main.async {
@@ -403,6 +407,82 @@ class ShareViewController: SLComposeServiceViewController {
 
             DispatchQueue.main.async {
                 self.openMainAppForImport(url)
+            }
+        }
+        task.resume()
+    }
+
+    private func uploadImage(_ image: UIImage) {
+        guard let jpeg = image.jpegData(compressionQuality: 0.85) else {
+            self.showEphemeralNoticeAndComplete(message: "Kunde inte läsa bild")
+            return
+        }
+
+        let apiUrl = apiBaseURL.appendingPathComponent("recipes/import-image/")
+        var request = URLRequest(url: apiUrl)
+        request.httpMethod = "POST"
+
+        let sharedDefaults = UserDefaults(suiteName: AppGroupConfig.suiteName)
+        let token = sharedDefaults?.string(forKey: AppGroupConfig.tokenKey) ?? ""
+        if token.isEmpty {
+            DispatchQueue.main.async {
+                self.showEphemeralNoticeAndComplete(message: "Logga in i appen först")
+            }
+            return
+        }
+        request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
+
+        let boundary = "Boundary-\(UUID().uuidString)"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        var body = Data()
+        func append(_ s: String) { body.append(Data(s.utf8)) }
+
+        append("--\(boundary)\r\n")
+        append("Content-Disposition: form-data; name=\"dish_type\"\r\n\r\n")
+        append("\(selectedDishType.id)\r\n")
+
+        append("--\(boundary)\r\n")
+        append("Content-Disposition: form-data; name=\"image\"; filename=\"share.jpg\"\r\n")
+        append("Content-Type: image/jpeg\r\n\r\n")
+        body.append(jpeg)
+        append("\r\n")
+        append("--\(boundary)--\r\n")
+
+        request.httpBody = body
+
+        shareLogger.info("Attempting import from shared image (bytes=\(jpeg.count))")
+
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self else { return }
+
+            if let error {
+                shareLogger.error("Image upload error: \(String(describing: error), privacy: .public)")
+                DispatchQueue.main.async {
+                    self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
+                }
+                return
+            }
+
+            if let http = response as? HTTPURLResponse {
+                shareLogger.info("Image upload HTTP status: \(http.statusCode)")
+                if http.statusCode == 201 || http.statusCode == 200 {
+                    DispatchQueue.main.async {
+                        self.showEphemeralNoticeAndComplete(message: "Sparad till MinaRecept")
+                    }
+                } else {
+                    if let data, let body = String(data: data, encoding: .utf8) {
+                        shareLogger.error("Image import failed body: \(body, privacy: .public)")
+                    }
+                    DispatchQueue.main.async {
+                        self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
+                    }
+                }
+                return
+            }
+
+            DispatchQueue.main.async {
+                self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
             }
         }
         task.resume()

@@ -14,6 +14,7 @@ from jose import jwt
 from rest_framework import permissions, status, viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -198,6 +199,69 @@ class RecipeViewSet(OwnedModelViewSet):
             servings=imported.servings,
             image_url=imported.image_url,
             dish_type=dish_type or Recipe._meta.get_field('dish_type').default,
+        )
+
+        serializer = self.get_serializer(recipe)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="import-image",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def import_from_image(self, request):
+        """
+        Import a recipe from a shared image (OCR).
+
+        Used by iOS Share Extension when an app shares only a UIImage (no URL).
+        Expects multipart/form-data with:
+          - image: the image file (jpeg/png)
+          - dish_type: optional recipe category id
+        """
+        dish_type = (request.data.get("dish_type") or "").strip()
+        # Backwards compatibility: older clients may send "everyday".
+        if dish_type == "everyday":
+            dish_type = "lunch_dinner"
+        if dish_type:
+            valid_types = {choice[0] for choice in Recipe.TYPE_CHOICES}
+            if dish_type not in valid_types:
+                return Response({"detail": "Invalid dish_type."}, status=status.HTTP_400_BAD_REQUEST)
+
+        image_file = request.FILES.get("image") or request.FILES.get("recipe_image")
+        if not image_file:
+            return Response({"detail": "Missing image."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from .ocr_service import ImageRecipeParser
+
+            parser = ImageRecipeParser()
+            data = parser.parse_image(image_file) or {}
+        except Exception as e:
+            return Response({"detail": f"Image import failed: {e}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        title = (data.get("title") or "").strip() if isinstance(data, dict) else ""
+        description = (data.get("description") or "").strip() if isinstance(data, dict) else ""
+        ingredients = (data.get("ingredients") or "").strip() if isinstance(data, dict) else ""
+        steps = (data.get("steps") or "").strip() if isinstance(data, dict) else ""
+        cooking_time = int(data.get("cooking_time") or 0) if isinstance(data, dict) else 0
+        servings = int(data.get("servings") or 4) if isinstance(data, dict) else 4
+
+        if not title and not ingredients and not steps:
+            return Response(
+                {"detail": "Could not extract recipe from image."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        recipe = Recipe.objects.create(
+            user=request.user,
+            title=title or "Importerad bild",
+            description=description,
+            ingredients=ingredients,
+            steps=steps,
+            cooking_time=max(1, cooking_time) if cooking_time else 30,
+            servings=max(1, servings) if servings else 4,
+            dish_type=dish_type or Recipe._meta.get_field("dish_type").default,
         )
 
         serializer = self.get_serializer(recipe)
