@@ -1002,10 +1002,11 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
                 if not extracted:
                     extracted = extract_quantity_lines(root)
 
-                # 2) If anchor is only a marker, scan forward in the DOM for the actual ingredient list.
-                # Limit search to the next N <ul> nodes to avoid traversing the whole page.
+                # 2) If anchor is only a marker, scan forward in the DOM for the actual ingredients.
+                # Landleys often renders ingredients as checkbox/label/div markup (not <ul>/<li>),
+                # and the anchor itself only contains a heading.
                 if not extracted and anchor is not None:
-                    # Ingredient lines typically start with a quantity and unit. Comments do not.
+                    # Ingredient lines typically start with a quantity and unit. Comments/nav do not.
                     qty_unit_re = re.compile(
                         r"^\s*\d+(?:[.,]\d+)?\s*(?:"
                         r"kg|g|mg|l|dl|cl|ml|msk|tsk|krm|st|styck|stycken"
@@ -1019,41 +1020,73 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
                         "lämna en kommentar",
                         "reply",
                     ]
-                    candidates: list[list[str]] = []
-                    for ul in anchor.find_all_next("ul", limit=60):
-                        items = [clean_text(li.get_text(" ", strip=True)) for li in ul.find_all("li")]
-                        items = [x for x in items if x]
-                        if len(items) < 3:
+                    # First try: scan for ingredient-like lines in following elements (checkbox-style markup).
+                    lines: list[str] = []
+                    stop_words = ["kommentar", "kommentarer"]
+                    for el in anchor.find_all_next(["label", "li", "p", "span", "div"], limit=2500):
+                        t = clean_text(el.get_text(" ", strip=True))
+                        if not t:
                             continue
-                        if looks_like_nav(items):
+                        tl = t.lower()
+                        if any(sw in tl for sw in stop_words):
+                            break
+                        if any(b in tl for b in bad_snippets):
                             continue
-                        joined = " ".join(items).lower()
-                        if any(s in joined for s in comment_snippets):
+                        if any(s in tl for s in comment_snippets):
                             continue
+                        if qty_unit_re.search(t) and unit_re.search(t):
+                            # Avoid temperatures/times; keep units like "msk" etc.
+                            if "°" in t or "grader" in tl:
+                                continue
+                            if re.search(r"\b(min|minuter|tim|timmar)\b", tl):
+                                continue
+                            if len(t) <= 140:
+                                lines.append(t)
+                        if len(lines) >= 25:
+                            # Enough ingredients; stop early.
+                            break
 
-                        # Require that a meaningful fraction of lines look like ingredient rows.
-                        qty_hits = sum(1 for x in items if qty_unit_re.search(x or ""))
-                        digit_hits = sum(1 for x in items if re.search(r"\d", x or ""))
-                        unit_hits = sum(1 for x in items if unit_re.search(x or ""))
-                        if digit_hits == 0 or unit_hits == 0:
-                            continue
-                        if qty_hits < 2:
-                            continue
-                        if qty_hits / max(1, len(items)) < 0.4:
-                            continue
-                        candidates.append(items)
+                    # If that didn't work, try UL-based candidates (some pages still use <ul>).
+                    if not lines:
+                        candidates: list[list[str]] = []
+                        for ul in anchor.find_all_next("ul", limit=80):
+                            items = [clean_text(li.get_text(" ", strip=True)) for li in ul.find_all("li")]
+                            items = [x for x in items if x]
+                            if len(items) < 3:
+                                continue
+                            if looks_like_nav(items):
+                                continue
+                            joined = " ".join(items).lower()
+                            if any(s in joined for s in comment_snippets):
+                                continue
 
-                    if candidates:
-                        candidates.sort(
-                            key=lambda lst: (
-                                sum(1 for x in lst if qty_unit_re.search(x or "")),
-                                sum(1 for x in lst if unit_re.search(x or "")),
-                                sum(1 for x in lst if re.search(r"\d", x or "")),
-                                len(lst),
-                            ),
-                            reverse=True,
-                        )
-                        extracted = candidates[0]
+                            qty_hits = sum(1 for x in items if qty_unit_re.search(x or ""))
+                            unit_hits = sum(1 for x in items if unit_re.search(x or ""))
+                            if unit_hits == 0 or qty_hits < 2:
+                                continue
+                            candidates.append(items)
+
+                        if candidates:
+                            candidates.sort(
+                                key=lambda lst: (
+                                    sum(1 for x in lst if qty_unit_re.search(x or "")),
+                                    sum(1 for x in lst if unit_re.search(x or "")),
+                                    len(lst),
+                                ),
+                                reverse=True,
+                            )
+                            lines = candidates[0]
+
+                    if lines:
+                        # Deduplicate while preserving order
+                        seen = set()
+                        deduped: list[str] = []
+                        for x in lines:
+                            if x in seen:
+                                continue
+                            seen.add(x)
+                            deduped.append(x)
+                        extracted = deduped
 
                 if extracted:
                     ingredients = extracted

@@ -125,4 +125,30 @@ class LandleyskokIngredientsFallbackTests(unittest.TestCase):
         self.assertIn("1 msk malen spiskummin", data.ingredients)
         self.assertNotIn("Anna: Så gott!", data.ingredients)
 
+    def test_landleyskok_checkbox_style_ingredients_after_anchor(self):
+        # Simulate a recipe card that uses checkbox/label markup (no <ul> for ingredients).
+        html = b"""
+        <html>
+          <body>
+            <div id="recept-content"><h2>Recept p\xc3\xa5 Pulled Pork</h2></div>
+            <div class="recipe-card">
+              <div class="ingredients">
+                <label>1 kg fl\xc3\xa4skkarr\xc3\xa9</label>
+                <label>1 msk malen spiskummin</label>
+                <label>33 cl \xc3\xb6l</label>
+              </div>
+              <div class="comments">
+                <h3>Kommentarer</h3>
+                <label>Anna: S\xc3\xa5 gott!</label>
+              </div>
+            </div>
+          </body>
+        </html>
+        """
+
+        data = import_recipe_from_html("https://www.landleyskok.se/recept/x#recept-content", html)
+        self.assertIn("1 kg fläskkarré", data.ingredients)
+        self.assertIn("1 msk malen spiskummin", data.ingredients)
+        self.assertNotIn("Anna: Så gott!", data.ingredients)
+
 
