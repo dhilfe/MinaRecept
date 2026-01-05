@@ -101,7 +101,18 @@ class ShareViewController: SLComposeServiceViewController {
         ].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
         let preflightText = preflightTextCandidates.joined(separator: "\n\n")
-        let preflightURL = preflightTextCandidates.compactMap { self.extractURL(from: $0) }.first
+        var preflightURL = preflightTextCandidates.compactMap { self.extractURL(from: $0) }.first
+
+        // Instagram sometimes shares only an image (no URL/text). Some apps still make this work
+        // by reading a recently-copied link from pasteboard. Only touch pasteboard if needed.
+        if preflightURL == nil {
+            let pb = UIPasteboard.general
+            if let u = pb.url {
+                preflightURL = u
+            } else if let s = pb.string, let u = self.extractURL(from: s) {
+                preflightURL = u
+            }
+        }
 
         shareLogger.info("[DEBUG] preflightTextLen=\(preflightText.count) preflightURL=\((preflightURL?.absoluteString ?? "(none)"), privacy: .public) candidates=\(candidates.count)")
 
@@ -290,8 +301,14 @@ class ShareViewController: SLComposeServiceViewController {
         func tryUploadURLFromCandidates(_ idx: Int) {
             if didFinish { return }
             guard idx < candidates.count else {
-                // No URL found anywhere -> fall back to images.
-                tryUploadImageFromCandidates(0)
+                // No URL found anywhere -> try pasteboard one last time before falling back to images.
+                let pb = UIPasteboard.general
+                let pbURL = pb.url ?? (pb.string.flatMap { self.extractURL(from: $0) })
+                if let url = pbURL {
+                    finishOnce { self.uploadURL(url, sourceText: preflightText) }
+                } else {
+                    tryUploadImageFromCandidates(0)
+                }
                 return
             }
 
@@ -378,6 +395,47 @@ class ShareViewController: SLComposeServiceViewController {
                         tryUploadURLFromCandidates(idx + 1)
                     }
                 }
+                return
+            }
+
+            // Brute-force: try any remaining non-image UTIs and attempt URL extraction from the payload.
+            // Some providers don't correctly advertise URL/text UTIs even if they embed a URL.
+            let excluded = Set(urlTypeIdentifiers + textTypeIdentifiers + dataTypeIdentifiers)
+            var otherTypeIdentifiers = provider.registeredTypeIdentifiers
+                .filter { !excluded.contains($0) }
+                .filter { UTType($0)?.conforms(to: .image) != true }
+
+            if otherTypeIdentifiers.count > 12 {
+                otherTypeIdentifiers = Array(otherTypeIdentifiers.prefix(12))
+            }
+
+            if !otherTypeIdentifiers.isEmpty {
+                func tryOtherType(_ tIdx: Int) {
+                    if didFinish { return }
+                    guard tIdx < otherTypeIdentifiers.count else {
+                        tryUploadURLFromCandidates(idx + 1)
+                        return
+                    }
+
+                    let typeId = otherTypeIdentifiers[tIdx]
+                    provider.loadItem(forTypeIdentifier: typeId) { [weak self] (item, error) in
+                        guard let self else { return }
+                        if didFinish { return }
+
+                        if error != nil {
+                            tryOtherType(tIdx + 1)
+                            return
+                        }
+
+                        if let url = self.extractURL(fromItem: item) ?? self.extractURL(from: self.contentText) {
+                            finishOnce { self.uploadURL(url, sourceText: preflightText) }
+                        } else {
+                            tryOtherType(tIdx + 1)
+                        }
+                    }
+                }
+
+                tryOtherType(0)
                 return
             }
 

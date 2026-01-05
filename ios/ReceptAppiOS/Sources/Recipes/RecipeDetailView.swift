@@ -220,22 +220,9 @@ struct RecipeDetailView: View {
 
     private func isHeadingLine(ing: IngredientDTO, text: String, nextText: String?) -> Bool {
         let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasAmountOrUnit = !((ing.amount ?? "").isEmpty && (ing.unit ?? "").isEmpty)
-
-        // Candidate signals
-        let endsWithColon = s.hasSuffix(":")
-        let isUnstructuredNoDigits = (!hasAmountOrUnit && s.rangeOfCharacter(from: .decimalDigits) == nil && s.count > 3)
-        let isCandidate = endsWithColon || isUnstructuredNoDigits
-        if !isCandidate { return false }
-
-        // Heuristic to avoid regressions like:
-        //   salt:
-        //   peppar:
-        // Treat as a heading only if it is followed by a non-heading ingredient line.
-        let next = (nextText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if next.isEmpty { return false }
-        if next.hasSuffix(":") { return false }
-        return true
+        // Only treat explicit ":"-suffix lines as headings.
+        // This avoids turning pantry items like "salt" into headings (which shows up as "salt:").
+        return s.hasSuffix(":")
     }
 
     private func isHeadingStep(_ step: String) -> Bool {
