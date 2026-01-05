@@ -61,6 +61,17 @@ class ShareViewController: SLComposeServiceViewController {
             return
         }
 
+        // IMPORTANT:
+        // Some apps share multiple attachments (e.g. UIImage + NSURL). The order is not stable.
+        // We must prefer a real web URL if *any* attachment contains one, and only fall back to image OCR
+        // when we have exhausted URL/text candidates.
+        var didFinish = false
+        func finishOnce(_ work: @escaping () -> Void) {
+            guard !didFinish else { return }
+            didFinish = true
+            work()
+        }
+
         // Some apps (including some recipe apps) don't attach a URL item at all.
         // They may embed the URL in extension item text fields or in the compose text.
         let extensionItemText = extensionItems
@@ -75,138 +86,208 @@ class ShareViewController: SLComposeServiceViewController {
         for t in preflightTextCandidates {
             if let url = self.extractURL(from: t) {
                 shareLogger.info("Found URL in preflight text (len=\(t.count)).")
-                self.uploadURL(url)
+                finishOnce { self.uploadURL(url) }
                 return
             }
         }
 
+        // Flatten all providers so we can do a URL-first pass across all attachments.
+        struct AttachmentCandidate {
+            let provider: NSItemProvider
+            let extensionItem: NSExtensionItem?
+        }
+
+        var candidates: [AttachmentCandidate] = []
         for item in extensionItems {
             guard let attachments = item.attachments else { continue }
-
             for provider in attachments {
                 // Debug: learn what other apps share (ICA/kokaihop, etc.).
                 let utis = provider.registeredTypeIdentifiers.joined(separator: ", ")
                 shareLogger.info("[DEBUG] attachment UTIs: \(utis, privacy: .public)")
+                candidates.append(.init(provider: provider, extensionItem: item))
+            }
+        }
 
-                if provider.canLoadObject(ofClass: URL.self) {
-                    _ = provider.loadObject(ofClass: URL.self) { [weak self] object, error in
-                        if let error {
-                            shareLogger.error("Failed to load URL object: \(String(describing: error), privacy: .public)")
-                            self?.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
-                            return
-                        }
-                        if let url = object {
-                            self?.uploadURL(url)
-                        } else {
-                            self?.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
-                        }
-                    }
-                    return // Handle only the first URL found
-                }
-
-                // Fallback 1: NSString object (e.g. Chrome/Notes sometimes)
-                if provider.canLoadObject(ofClass: NSString.self) {
-                    _ = provider.loadObject(ofClass: NSString.self) { [weak self] object, error in
-                        if let error {
-                            shareLogger.error("Failed to load String object: \(String(describing: error), privacy: .public)")
-                            // Continue to try other providers or fallback methods
-                        } else if let string = object as? String {
-                            // ICA/Kokaihop might share "Check this link: https://..."
-                            // Try to find a URL inside the string
-                            if let url = self?.extractURL(from: string) {
-                                self?.uploadURL(url)
-                                return
-                            }
-                            
-                            // If just a raw URL string
-                            if let url = URL(string: string), url.scheme != nil {
-                                self?.uploadURL(url)
-                                return
-                            }
-                        }
+        func tryUploadImageFromCandidates(_ idx: Int) {
+            if didFinish { return }
+            guard idx < candidates.count else {
+                DispatchQueue.main.async {
+                    if let url = self.extractURL(from: self.contentText) {
+                        finishOnce { self.uploadURL(url) }
+                    } else {
+                        self.showEphemeralNoticeAndComplete(message: "Ingen länk hittades")
                     }
                 }
-                
-                // Fallback 2: loadItem for text-like UTIs (ICA/HelloFresh/etc. often share as text)
-                let textTypeIdentifiers = [
-                    UTType.plainText.identifier,
-                    UTType.utf8PlainText.identifier,
-                    UTType.text.identifier,
-                ]
+                return
+            }
 
-                for typeId in textTypeIdentifiers {
-                    if provider.hasItemConformingToTypeIdentifier(typeId) {
-                        provider.loadItem(forTypeIdentifier: typeId) { [weak self] (item, error) in
-                            guard let self else { return }
-                            if let error {
-                                shareLogger.error("Failed to load text item (\(typeId, privacy: .public)): \(String(describing: error), privacy: .public)")
-                                DispatchQueue.main.async {
-                                    self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
-                                }
-                                return
-                            }
+            let provider = candidates[idx].provider
 
-                            if let url = self.extractURL(fromItem: item) ?? self.extractURL(from: self.contentText) {
-                                self.uploadURL(url)
-                            } else {
-                                let cls = item.map { String(describing: type(of: $0)) } ?? "nil"
-                                shareLogger.error("No URL found in shared text (\(typeId, privacy: .public)). itemClass=\(cls, privacy: .public) contentTextLen=\(self.contentText.count)")
-                                DispatchQueue.main.async {
-                                    self.showEphemeralNoticeAndComplete(message: "Ingen länk hittades")
-                                }
-                            }
-                        }
+            // Prefer direct UIImage loading.
+            if provider.canLoadObject(ofClass: UIImage.self) {
+                _ = provider.loadObject(ofClass: UIImage.self) { [weak self] object, error in
+                    guard let self else { return }
+                    if didFinish { return }
+
+                    if let error {
+                        shareLogger.error("Failed to load UIImage object: \(String(describing: error), privacy: .public)")
+                        tryUploadImageFromCandidates(idx + 1)
                         return
                     }
-                }
-
-                // Fallback 3: attempt to load any URL/text/data UTI we got and extract a link from it.
-                for typeId in provider.registeredTypeIdentifiers {
-                    guard let ut = UTType(typeId) else { continue }
-                    let isCandidate = ut.conforms(to: .url) || ut.conforms(to: .text) || ut.conforms(to: .data)
-                    guard isCandidate else { continue }
-
-                    provider.loadItem(forTypeIdentifier: typeId) { [weak self] (item, error) in
-                        guard let self else { return }
-                        if let error {
-                            shareLogger.error("Failed to load item (\(typeId, privacy: .public)): \(String(describing: error), privacy: .public)")
-                            DispatchQueue.main.async {
-                                self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
-                            }
-                            return
-                        }
-
-                        if let url = self.extractURL(fromItem: item) ?? self.extractURL(from: self.contentText) {
-                            self.uploadURL(url)
-                        } else {
-                            if let image = item as? UIImage {
-                                let inferredTitle = self.bestEffortTitleForImageImport(
-                                    suggestedName: provider.suggestedName,
-                                    item: item
-                                )
-                                self.uploadImage(image, title: inferredTitle)
-                                return
-                            }
-                            let cls = item.map { String(describing: type(of: $0)) } ?? "nil"
-                            shareLogger.error("No URL found in shared item (\(typeId, privacy: .public)). itemClass=\(cls, privacy: .public) contentTextLen=\(self.contentText.count)")
-                            DispatchQueue.main.async {
-                                self.showEphemeralNoticeAndComplete(message: "Ingen länk hittades")
-                            }
-                        }
+                    if let image = object as? UIImage {
+                        let inferredTitle = self.bestEffortTitleForImageImport(
+                            suggestedName: provider.suggestedName,
+                            item: nil
+                        )
+                        finishOnce { self.uploadImage(image, title: inferredTitle) }
+                    } else {
+                        tryUploadImageFromCandidates(idx + 1)
                     }
-                    return
                 }
+                return
             }
+
+            // As a fallback, try to load image data if it conforms to UTType.image.
+            for typeId in provider.registeredTypeIdentifiers {
+                guard let ut = UTType(typeId), ut.conforms(to: .image) else { continue }
+                provider.loadItem(forTypeIdentifier: typeId) { [weak self] item, error in
+                    guard let self else { return }
+                    if didFinish { return }
+
+                    if let error {
+                        shareLogger.error("Failed to load image item (\(typeId, privacy: .public)): \(String(describing: error), privacy: .public)")
+                        tryUploadImageFromCandidates(idx + 1)
+                        return
+                    }
+
+                    if let image = item as? UIImage {
+                        let inferredTitle = self.bestEffortTitleForImageImport(
+                            suggestedName: provider.suggestedName,
+                            item: item
+                        )
+                        finishOnce { self.uploadImage(image, title: inferredTitle) }
+                        return
+                    }
+                    if let url = item as? URL, url.isFileURL, let data = try? Data(contentsOf: url), let image = UIImage(data: data) {
+                        let inferredTitle = self.bestEffortTitleForImageImport(
+                            suggestedName: provider.suggestedName,
+                            item: url
+                        )
+                        finishOnce { self.uploadImage(image, title: inferredTitle) }
+                        return
+                    }
+                    if let data = item as? Data, let image = UIImage(data: data) {
+                        let inferredTitle = self.bestEffortTitleForImageImport(
+                            suggestedName: provider.suggestedName,
+                            item: item
+                        )
+                        finishOnce { self.uploadImage(image, title: inferredTitle) }
+                        return
+                    }
+
+                    tryUploadImageFromCandidates(idx + 1)
+                }
+                return
+            }
+
+            tryUploadImageFromCandidates(idx + 1)
         }
 
-        // If we got here, we didn't find any usable attachments.
-        DispatchQueue.main.async {
-            if let url = self.extractURL(from: self.contentText) {
-                self.uploadURL(url)
-            } else {
-                self.showEphemeralNoticeAndComplete(message: "Ingen länk hittades")
+        func tryUploadURLFromCandidates(_ idx: Int) {
+            if didFinish { return }
+            guard idx < candidates.count else {
+                // No URL found anywhere -> fall back to images.
+                tryUploadImageFromCandidates(0)
+                return
             }
+
+            let provider = candidates[idx].provider
+
+            // Prefer explicit URL UTIs to avoid the "try NSURL for public.image" problem.
+            let urlTypeIdentifiers: [String] = [
+                UTType.url.identifier,
+                UTType.webURL.identifier,
+                UTType.fileURL.identifier,
+            ]
+
+            for typeId in urlTypeIdentifiers where provider.hasItemConformingToTypeIdentifier(typeId) {
+                provider.loadItem(forTypeIdentifier: typeId) { [weak self] (item, error) in
+                    guard let self else { return }
+                    if didFinish { return }
+
+                    if let error {
+                        shareLogger.error("Failed to load URL item (\(typeId, privacy: .public)): \(String(describing: error), privacy: .public)")
+                        tryUploadURLFromCandidates(idx + 1)
+                        return
+                    }
+
+                    if let url = self.extractURL(fromItem: item) ?? self.extractURL(from: self.contentText) {
+                        finishOnce { self.uploadURL(url) }
+                    } else {
+                        tryUploadURLFromCandidates(idx + 1)
+                    }
+                }
+                return
+            }
+
+            // Text-like UTIs
+            let textTypeIdentifiers = [
+                UTType.plainText.identifier,
+                UTType.utf8PlainText.identifier,
+                UTType.text.identifier,
+                UTType.html.identifier,
+                UTType.rtf.identifier,
+                UTType.rtfd.identifier,
+            ]
+
+            for typeId in textTypeIdentifiers where provider.hasItemConformingToTypeIdentifier(typeId) {
+                provider.loadItem(forTypeIdentifier: typeId) { [weak self] (item, error) in
+                    guard let self else { return }
+                    if didFinish { return }
+
+                    if let error {
+                        shareLogger.error("Failed to load text item (\(typeId, privacy: .public)): \(String(describing: error), privacy: .public)")
+                        tryUploadURLFromCandidates(idx + 1)
+                        return
+                    }
+
+                    if let url = self.extractURL(fromItem: item) ?? self.extractURL(from: self.contentText) {
+                        finishOnce { self.uploadURL(url) }
+                    } else {
+                        tryUploadURLFromCandidates(idx + 1)
+                    }
+                }
+                return
+            }
+
+            // Some providers still expose URL objects without advertising URL UTIs reliably.
+            // Only try this as a last resort for this provider.
+            if provider.canLoadObject(ofClass: URL.self) {
+                _ = provider.loadObject(ofClass: URL.self) { [weak self] object, error in
+                    guard let self else { return }
+                    if didFinish { return }
+
+                    if let error {
+                        shareLogger.error("Failed to load URL object: \(String(describing: error), privacy: .public)")
+                        tryUploadURLFromCandidates(idx + 1)
+                        return
+                    }
+                    if let url = object {
+                        finishOnce { self.uploadURL(url) }
+                    } else {
+                        tryUploadURLFromCandidates(idx + 1)
+                    }
+                }
+                return
+            }
+
+            // Continue scanning
+            tryUploadURLFromCandidates(idx + 1)
         }
+
+        // Start URL-first scanning.
+        tryUploadURLFromCandidates(0)
+        return
     }
 
     override func configurationItems() -> [Any]! {

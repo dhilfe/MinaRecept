@@ -234,20 +234,50 @@ class RecipeViewSet(OwnedModelViewSet):
 
         provided_title = (request.data.get("title") or "").strip()
 
+        def safe_int(value, default: int) -> int:
+            """
+            Best-effort int conversion for OCR output.
+            Handles numbers, numeric strings, and strings like "30 min" / "PT30M" (extracts first integer).
+            """
+            try:
+                if value is None:
+                    return default
+                if isinstance(value, bool):
+                    return default
+                if isinstance(value, int):
+                    return value
+                if isinstance(value, float):
+                    return int(value)
+                s = str(value).strip()
+                if not s:
+                    return default
+                import re
+                m = re.search(r"(\d+)", s)
+                if not m:
+                    return default
+                return int(m.group(1))
+            except Exception:
+                return default
+
+        data: dict = {}
         try:
             from .ocr_service import ImageRecipeParser
 
             parser = ImageRecipeParser()
-            data = parser.parse_image(image_file) or {}
-        except Exception as e:
-            return Response({"detail": f"Image import failed: {e}"}, status=status.HTTP_400_BAD_REQUEST)
+            parsed = parser.parse_image(image_file)
+            if isinstance(parsed, dict):
+                data = parsed
+        except Exception:
+            # Never fail hard here: Share Extension expects a 201 for good UX.
+            logger.exception("Image import OCR failed (will create placeholder recipe)")
+            data = {}
 
-        title = (data.get("title") or "").strip() if isinstance(data, dict) else ""
-        description = (data.get("description") or "").strip() if isinstance(data, dict) else ""
-        ingredients = (data.get("ingredients") or "").strip() if isinstance(data, dict) else ""
-        steps = (data.get("steps") or "").strip() if isinstance(data, dict) else ""
-        cooking_time = int(data.get("cooking_time") or 0) if isinstance(data, dict) else 0
-        servings = int(data.get("servings") or 4) if isinstance(data, dict) else 4
+        title = (data.get("title") or "").strip()
+        description = (data.get("description") or "").strip()
+        ingredients = (data.get("ingredients") or "").strip()
+        steps = (data.get("steps") or "").strip()
+        cooking_time = safe_int(data.get("cooking_time"), default=0)
+        servings = safe_int(data.get("servings"), default=4)
 
         # If OCR fell back to the mock parser (no API key), prefer a user-provided title.
         if provided_title and (not title or title.lower().startswith("mockat recept")):
@@ -282,7 +312,7 @@ class RecipeViewSet(OwnedModelViewSet):
             recipe.image.save(getattr(image_file, "name", "share.jpg"), image_file, save=True)
         except Exception:
             # Non-fatal: OCR text is still saved, and user can add an image later.
-            pass
+            logger.exception("Image import: failed to save uploaded image to recipe (non-fatal)")
 
         serializer = self.get_serializer(recipe)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
