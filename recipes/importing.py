@@ -856,7 +856,37 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
         if micro:
             ingredients = micro
         else:
-            ingredients = _extract_list_after_heading(["ingredienser", "det här behöver du", "du behöver"], "ul")
+            # Common "recipe card" plugins used by many blogs.
+            plugin_selectors = [
+                # WP Recipe Maker
+                ".wprm-recipe-ingredient",
+                ".wprm-recipe-ingredient-name",
+                # Mediavine Create
+                ".mv-create-ingredients li",
+                ".mv-create-ingredients-item",
+                # Tasty Recipes
+                ".tasty-recipes-ingredients li",
+                # Generic
+                ".recipe-ingredients li",
+            ]
+            plugin_ings: list[str] = []
+            for sel in plugin_selectors:
+                for el in soup.select(sel):
+                    t = clean_text(el.get_text(" ", strip=True))
+                    if t:
+                        plugin_ings.append(t)
+            # Deduplicate while preserving order
+            if plugin_ings:
+                seen = set()
+                deduped: list[str] = []
+                for x in plugin_ings:
+                    if x in seen:
+                        continue
+                    seen.add(x)
+                    deduped.append(x)
+                ingredients = deduped
+            else:
+                ingredients = _extract_list_after_heading(["ingredienser", "det här behöver du", "du behöver"], "ul")
 
     if not steps:
         micro_steps = [clean_text(x.get_text(" ", strip=True)) for x in soup.select('[itemprop="recipeInstructions"]')]
