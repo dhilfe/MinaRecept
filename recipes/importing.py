@@ -828,22 +828,59 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
             """Fetch Instagram oEmbed (no auth) as a fallback for caption/thumbnail."""
             try:
                 from urllib.parse import quote
+                import logging
 
-                oembed_url = f"https://api.instagram.com/oembed/?url={quote(target_url, safe='')}&omitscript=true"
-                resp = requests.get(
-                    oembed_url,
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-                        ),
-                        "Accept": "application/json",
-                    },
-                    timeout=10,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                return data if isinstance(data, dict) else None
+                logger = logging.getLogger(__name__)
+
+                encoded = quote(target_url, safe='')
+
+                # In practice, https://www.instagram.com/oembed/ tends to be more reliable than api.instagram.com
+                # for unauthenticated requests.
+                oembed_candidates = [
+                    f"https://www.instagram.com/oembed/?url={encoded}&omitscript=true",
+                    f"https://api.instagram.com/oembed/?url={encoded}&omitscript=true",
+                ]
+
+                last_status: int | None = None
+                last_body: str | None = None
+
+                for oembed_url in oembed_candidates:
+                    try:
+                        resp = requests.get(
+                            oembed_url,
+                            headers={
+                                "User-Agent": (
+                                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                                    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+                                ),
+                                "Accept": "application/json",
+                            },
+                            timeout=10,
+                        )
+                        raw_status = getattr(resp, 'status_code', None)
+                        status: int | None = None
+                        if isinstance(raw_status, int):
+                            status = raw_status
+                        elif isinstance(raw_status, str) and raw_status.isdigit():
+                            status = int(raw_status)
+                        last_status = status
+
+                        if status is not None and status >= 400:
+                            last_body = (getattr(resp, 'text', '') or '')[:300]
+                        resp.raise_for_status()
+                        data = resp.json()
+                        if isinstance(data, dict):
+                            return data
+                    except Exception:
+                        continue
+
+                if last_status is not None and last_status >= 400:
+                    logger.warning(
+                        "Instagram oEmbed failed (status=%s body=%s)",
+                        last_status,
+                        (last_body or "")[:300],
+                    )
+                return None
             except Exception:
                 return None
 
