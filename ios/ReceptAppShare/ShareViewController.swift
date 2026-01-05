@@ -418,6 +418,8 @@ class ShareViewController: SLComposeServiceViewController {
             return
         }
 
+        let titleForImageImport = Self.stripAfterPipe(self.textView.text ?? self.contentText).trimmingCharacters(in: .whitespacesAndNewlines)
+
         let apiUrl = apiBaseURL.appendingPathComponent("recipes/import-image/")
         var request = URLRequest(url: apiUrl)
         request.httpMethod = "POST"
@@ -441,6 +443,12 @@ class ShareViewController: SLComposeServiceViewController {
         append("--\(boundary)\r\n")
         append("Content-Disposition: form-data; name=\"dish_type\"\r\n\r\n")
         append("\(selectedDishType.id)\r\n")
+
+        if !titleForImageImport.isEmpty {
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"title\"\r\n\r\n")
+            append("\(titleForImageImport)\r\n")
+        }
 
         append("--\(boundary)\r\n")
         append("Content-Disposition: form-data; name=\"image\"; filename=\"share.jpg\"\r\n")

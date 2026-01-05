@@ -42,4 +42,30 @@ class ImportImageAPITests(TestCase):
         resp = self.client.post("/api/recipes/import-image/", data={}, format="multipart")
         self.assertEqual(resp.status_code, 400)
 
+    @patch("recipes.api_views.ImageRecipeParser")
+    def test_import_image_prefers_provided_title_when_ocr_is_mock(self, mock_parser_cls):
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {
+            "title": "Mockat Recept från Bild",
+            "description": "",
+            "ingredients": "1 st Ägg",
+            "steps": "1. Test",
+            "cooking_time": 10,
+            "servings": 2,
+        }
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "title": "Bacon och rödlökssnittar", "dish_type": "appetizer"},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(data["title"], "Bacon och rödlökssnittar")
+        self.assertEqual(data["dish_type"], "appetizer")
+
 

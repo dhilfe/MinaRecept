@@ -232,6 +232,8 @@ class RecipeViewSet(OwnedModelViewSet):
         if not image_file:
             return Response({"detail": "Missing image."}, status=status.HTTP_400_BAD_REQUEST)
 
+        provided_title = (request.data.get("title") or "").strip()
+
         try:
             from .ocr_service import ImageRecipeParser
 
@@ -246,6 +248,10 @@ class RecipeViewSet(OwnedModelViewSet):
         steps = (data.get("steps") or "").strip() if isinstance(data, dict) else ""
         cooking_time = int(data.get("cooking_time") or 0) if isinstance(data, dict) else 0
         servings = int(data.get("servings") or 4) if isinstance(data, dict) else 4
+
+        # If OCR fell back to the mock parser (no API key), prefer a user-provided title.
+        if provided_title and (not title or title.lower().startswith("mockat recept")):
+            title = provided_title
 
         if not title and not ingredients and not steps:
             return Response(
