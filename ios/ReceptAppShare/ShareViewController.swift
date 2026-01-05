@@ -103,6 +103,8 @@ class ShareViewController: SLComposeServiceViewController {
         let preflightText = preflightTextCandidates.joined(separator: "\n\n")
         let preflightURL = preflightTextCandidates.compactMap { self.extractURL(from: $0) }.first
 
+        shareLogger.info("[DEBUG] preflightTextLen=\(preflightText.count) preflightURL=\((preflightURL?.absoluteString ?? "(none)"), privacy: .public) candidates=\(candidates.count)")
+
         let hasPotentialImage = candidates.contains { c in
             c.provider.canLoadObject(ofClass: UIImage.self) || c.provider.registeredTypeIdentifiers.contains(where: { UTType($0)?.conforms(to: .image) == true })
         }
@@ -351,6 +353,34 @@ class ShareViewController: SLComposeServiceViewController {
                 return
             }
 
+            // Data-like UTIs: some apps (incl. Instagram) may embed a URL inside a property list / JSON blob.
+            let dataTypeIdentifiers = [
+                UTType.propertyList.identifier,
+                UTType.json.identifier,
+                UTType.data.identifier,
+                UTType.item.identifier,
+            ]
+
+            for typeId in dataTypeIdentifiers where provider.hasItemConformingToTypeIdentifier(typeId) {
+                provider.loadItem(forTypeIdentifier: typeId) { [weak self] (item, error) in
+                    guard let self else { return }
+                    if didFinish { return }
+
+                    if let error {
+                        shareLogger.error("Failed to load data item (\(typeId, privacy: .public)): \(String(describing: error), privacy: .public)")
+                        tryUploadURLFromCandidates(idx + 1)
+                        return
+                    }
+
+                    if let url = self.extractURL(fromItem: item) ?? self.extractURL(from: self.contentText) {
+                        finishOnce { self.uploadURL(url, sourceText: preflightText) }
+                    } else {
+                        tryUploadURLFromCandidates(idx + 1)
+                    }
+                }
+                return
+            }
+
             // Some providers still expose URL objects without advertising URL UTIs reliably.
             // Only try this as a last resort for this provider.
             if provider.canLoadObject(ofClass: URL.self) {
@@ -408,7 +438,28 @@ class ShareViewController: SLComposeServiceViewController {
             let raw = Bundle.main.object(forInfoDictionaryKey: "API_BASE_URL") as? String,
             let url = URL(string: raw)
         {
-            return url
+            // Normalize base URL so it points to the API root (ends with /api/).
+            // This avoids accidentally hitting the web UI and receiving HTML redirects.
+            var base = url
+
+            // Ensure trailing slash
+            if !base.absoluteString.hasSuffix("/") {
+                if let fixed = URL(string: base.absoluteString + "/") {
+                    base = fixed
+                }
+            }
+
+            let path = base.path
+            if path.hasSuffix("/api") {
+                if let fixed = URL(string: base.absoluteString + "/") {
+                    return fixed
+                }
+                return base
+            }
+            if path.hasSuffix("/api/") {
+                return base
+            }
+            return base.appendingPathComponent("api/")
         }
 
         return URL(string: "http://localhost:8000/api/")!
@@ -597,6 +648,14 @@ class ShareViewController: SLComposeServiceViewController {
             var s = Self.stripAfterPipe(raw)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
 
+            // Avoid generic app names as titles.
+            let lowered = s
+                .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+                .lowercased()
+            if lowered == "instagram" || lowered == "reels" {
+                return ""
+            }
+
             // If the share sheet text includes multiple lines (common when apps share "everything"),
             // only keep the first non-empty line as the title.
             let lines = s
@@ -610,13 +669,13 @@ class ShareViewController: SLComposeServiceViewController {
             }
 
             // Cut off common section markers that shouldn't be part of the title.
-            let lowered = s
+            let lowered2 = s
                 .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
                 .lowercased()
             let markers = ["ingredienser", "gor sa har", "gör sa här", "gör så här", "instruktioner", "tillagning"]
             for m in markers {
-                if let r = lowered.range(of: m) {
-                    let idx = s.index(s.startIndex, offsetBy: lowered.distance(from: lowered.startIndex, to: r.lowerBound))
+                if let r = lowered2.range(of: m) {
+                    let idx = s.index(s.startIndex, offsetBy: lowered2.distance(from: lowered2.startIndex, to: r.lowerBound))
                     s = String(s[..<idx]).trimmingCharacters(in: .whitespacesAndNewlines)
                     break
                 }
