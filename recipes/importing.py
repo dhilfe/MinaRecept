@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import html
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import requests
 from bs4 import BeautifulSoup
@@ -809,8 +809,7 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
             kokaihop_data = _fetch_kokaihop_recipe_via_graphql(friendly_url)
             if kokaihop_data and (kokaihop_data.ingredients or kokaihop_data.steps):
                 # Keep the best image we already found (OG is usually great for Kokaihop)
-                kokaihop_data.image_url = image_url or og_image_url
-                return kokaihop_data
+                return replace(kokaihop_data, image_url=(image_url or og_image_url))
 
     if not ingredients and "kokaihop.se" in url:
         meta_keywords = soup.find("meta", attrs={"name": "keywords"})
