@@ -664,6 +664,62 @@ class ApiTests(TestCase):
         self.assertIn('Koka', created.steps)
         self.assertIn('Blanda', created.steps)
 
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_instagram_embed_fallback_when_oembed_blocked(self, mock_get):
+        # 1) Main page HTML has no OG/caption
+        page_resp = MagicMock()
+        page_resp.raise_for_status.return_value = None
+        page_resp.content = b"<html><head><title>Instagram</title></head><body>Login</body></html>"
+        page_resp.url = 'https://www.instagram.com/reel/DLQXLAUugPn/'
+
+        # 2) oEmbed attempts return 403
+        oembed_403_a = MagicMock()
+        oembed_403_a.status_code = 403
+        oembed_403_a.text = 'Forbidden'
+        oembed_403_a.raise_for_status.side_effect = Exception('HTTP 403')
+
+        oembed_403_b = MagicMock()
+        oembed_403_b.status_code = 403
+        oembed_403_b.text = 'Forbidden'
+        oembed_403_b.raise_for_status.side_effect = Exception('HTTP 403')
+
+        # 3) Embed page provides OG tags with caption
+        embed_html = """
+        <html><head>
+            <meta property="og:title" content="TestUser on Instagram: &quot;Kycklingwraps&quot;" />
+            <meta property="og:description" content="TestUser on Instagram: &quot;Kycklingwraps\n\nIngredienser:\n- kyckling\n- tortilla\n\nGör så här:\n1. Stek\n2. Rulla&quot;" />
+            <meta property="og:image" content="https://example.com/embedthumb.jpg" />
+        </head><body></body></html>
+        """
+        embed_resp = MagicMock()
+        embed_resp.status_code = 200
+        embed_resp.content = embed_html.encode('utf-8')
+
+        # Order of calls:
+        # - fetch_html(main)
+        # - oembed candidate 1
+        # - oembed candidate 2
+        # - embed fetch
+        mock_get.side_effect = [page_resp, oembed_403_a, oembed_403_b, embed_resp]
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {
+                'url': 'https://www.instagram.com/reel/DLQXLAUugPn/?igsh=ZmF3YzV1YjU4M3l1',
+                'dish_type': 'dessert',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+
+        recipe_id = response.data['id']
+        created = Recipe.objects.get(id=recipe_id)
+        self.assertEqual(created.title, 'Kycklingwraps')
+        self.assertIn('kyckling', created.ingredients)
+        self.assertIn('Rulla', created.steps)
+        self.assertEqual(created.image_url, 'https://example.com/embedthumb.jpg')
+
     def test_api_token_obtain(self):
         response = self.client_api.post(
             '/api/auth/token/',

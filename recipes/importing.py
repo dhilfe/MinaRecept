@@ -854,6 +854,7 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
 
                 last_status: int | None = None
                 last_body: str | None = None
+                last_error: str | None = None
 
                 for oembed_url in oembed_candidates:
                     try:
@@ -882,7 +883,8 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                         data = resp.json()
                         if isinstance(data, dict):
                             return data
-                    except Exception:
+                    except Exception as e:
+                        last_error = f"{type(e).__name__}: {e}"
                         continue
 
                 if last_status is not None and last_status >= 400:
@@ -891,7 +893,58 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                         last_status,
                         (last_body or "")[:300],
                     )
+                elif last_error:
+                    logger.warning("Instagram oEmbed failed (%s)", last_error)
                 return None
+            except Exception:
+                return None
+
+        def _try_instagram_embed_fallback(target_url: str) -> tuple[str, str, str] | None:
+            """Try fetching the public /embed/ page, which often contains OG tags even when the main page doesn't."""
+            try:
+                import logging
+                from urllib.parse import urlsplit
+
+                logger = logging.getLogger(__name__)
+                parts = urlsplit(target_url)
+                path_parts = [p for p in (parts.path or '').split('/') if p]
+                if len(path_parts) < 2:
+                    return None
+                kind = path_parts[0].lower()
+                shortcode = path_parts[1]
+                if kind not in {'reel', 'p', 'tv'}:
+                    return None
+
+                embed_url = f"https://www.instagram.com/{kind}/{shortcode}/embed/"
+                resp = requests.get(
+                    embed_url,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+                        ),
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Language": "sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7",
+                    },
+                    timeout=10,
+                )
+                if getattr(resp, 'status_code', 0) >= 400:
+                    logger.warning(
+                        "Instagram embed fetch failed (status=%s url=%s)",
+                        getattr(resp, 'status_code', None),
+                        embed_url,
+                    )
+                    return None
+
+                embed_soup = BeautifulSoup(resp.content, 'html.parser')
+                e_title = embed_soup.find('meta', property='og:title')
+                e_desc = embed_soup.find('meta', property='og:description')
+                e_img = embed_soup.find('meta', property='og:image')
+
+                e_title_text = clean_title(e_title.get('content', '')) if e_title else ''
+                e_desc_text = (e_desc.get('content', '') if e_desc else '')
+                e_img_url = (e_img.get('content', '') if e_img else '')
+                return e_title_text, e_desc_text, e_img_url
             except Exception:
                 return None
 
@@ -960,6 +1013,20 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                         author = clean_text(str(oembed.get("author_name") or ""))
                         title = f"Recept från {author}" if author else "Recept från Instagram"
 
+        # If oEmbed is blocked and we still have nothing, try the public embed page.
+        if not caption and not oembed_ok:
+            embed = _try_instagram_embed_fallback(url)
+            if embed:
+                e_title_text, e_desc_text, e_img_url = embed
+                if e_img_url and not image_url:
+                    image_url = e_img_url
+                if not caption and e_desc_text:
+                    caption = _extract_instagram_caption(e_desc_text)
+                if not caption and e_title_text:
+                    caption = _extract_instagram_caption(e_title_text)
+                if not title and e_title_text:
+                    title = e_title_text
+
         # Prefer the caption first line as title for IG (og:title is often "User on Instagram: \"...\"").
         if caption:
             cap_first = caption.splitlines()[0].strip()
@@ -988,7 +1055,8 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
         # If we still ended up with essentially nothing, log loudly for production debugging.
         if not title or (not ingredients and not steps and (description or '').strip() == src_line):
             logger.error(
-                "Instagram import empty (did_try_oembed=%s oembed_ok=%s title=%r og_title=%r og_desc_len=%s caption_len=%s)",
+                "Instagram import empty (url=%s did_try_oembed=%s oembed_ok=%s title=%r og_title=%r og_desc_len=%s caption_len=%s)",
+                url,
                 did_try_oembed,
                 oembed_ok,
                 title,
