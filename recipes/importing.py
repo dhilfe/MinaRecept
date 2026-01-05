@@ -623,6 +623,8 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
         import re
 
         raw = (text or '').replace('\r\n', '\n').replace('\r', '\n')
+        # Some sources (e.g. embed HTML) contain literal "\\n" sequences.
+        raw = raw.replace('\\n', '\n')
         raw = re.sub(r"https?://\S+", "", raw)
         lines = [ln.strip() for ln in raw.split('\n') if ln.strip()]
         if not lines:
@@ -821,6 +823,80 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
             caption = _extract_instagram_caption(og_desc_text)
         if not caption and og_title_text:
             caption = _extract_instagram_caption(og_title_text)
+
+        def _fetch_instagram_oembed(target_url: str) -> dict | None:
+            """Fetch Instagram oEmbed (no auth) as a fallback for caption/thumbnail."""
+            try:
+                from urllib.parse import quote
+
+                oembed_url = f"https://api.instagram.com/oembed/?url={quote(target_url, safe='')}&omitscript=true"
+                resp = requests.get(
+                    oembed_url,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+                        ),
+                        "Accept": "application/json",
+                    },
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return data if isinstance(data, dict) else None
+            except Exception:
+                return None
+
+        def _extract_caption_from_oembed_html(html: str) -> str:
+            try:
+                if not (html or '').strip():
+                    return ""
+                embed_soup = BeautifulSoup(html, "html.parser")
+                # Instagram embed often includes caption text in <p> elements.
+                texts = []
+                for p in embed_soup.find_all("p"):
+                    t = p.get_text("\n", strip=True)
+                    t = (t or '').replace('\\n', '\n').strip()
+                    if t:
+                        texts.append(t)
+                # Deduplicate and join.
+                out = []
+                seen = set()
+                for t in texts:
+                    if t in seen:
+                        continue
+                    seen.add(t)
+                    out.append(t)
+                return "\n\n".join(out).strip()
+            except Exception:
+                return ""
+
+        # If IG HTML didn't provide useful metadata, try oEmbed.
+        if (not caption) and (not og_desc_text) and (not og_title_text or ' on instagram:' in og_title_text.lower()):
+            oembed = _fetch_instagram_oembed(url)
+            if oembed:
+                thumb = clean_text(str(oembed.get("thumbnail_url") or ""))
+                if thumb and not image_url:
+                    image_url = thumb
+
+                # oEmbed sometimes provides a title derived from caption.
+                oe_title = clean_text(str(oembed.get("title") or ""))
+                oe_html = str(oembed.get("html") or "")
+                oe_caption = _extract_caption_from_oembed_html(oe_html)
+                if not oe_caption:
+                    oe_caption = oe_title
+
+                if oe_caption:
+                    caption = oe_caption
+                # If title still empty, use caption first line or fallback.
+                if not title:
+                    if caption:
+                        cap_first = caption.splitlines()[0].strip()
+                        if cap_first:
+                            title = clean_title(cap_first)[:200]
+                    if not title:
+                        author = clean_text(str(oembed.get("author_name") or ""))
+                        title = f"Recept från {author}" if author else "Recept från Instagram"
 
         # Prefer the caption first line as title for IG (og:title is often "User on Instagram: \"...\"").
         if caption:

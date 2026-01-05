@@ -581,6 +581,49 @@ class ApiTests(TestCase):
         self.assertIn('Originalreceptet är från https://www.instagram.com/reel/ABC/', created.description)
         self.assertEqual(created.image_url, 'https://example.com/thumb.jpg')
 
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_instagram_oembed_fallback_parses_caption(self, mock_get):
+        """If Instagram HTML has no OG/caption, fall back to oEmbed for title/thumb/caption."""
+        page_resp = MagicMock()
+        page_resp.raise_for_status.return_value = None
+        page_resp.content = b"<html><head><title>Instagram</title></head><body>Login</body></html>"
+
+        oembed_resp = MagicMock()
+        oembed_resp.raise_for_status.return_value = None
+        oembed_resp.json.return_value = {
+            'title': 'Pasta på 10 minuter – ingredienser och gör så här i caption',
+            'thumbnail_url': 'https://cdn.example.com/thumb.jpg',
+            'author_name': 'somechef',
+            'html': (
+                '<blockquote>'
+                '<p>Ingredienser:\n- pasta\n- grädde\n\nGör så här:\n1. Koka\n2. Blanda</p>'
+                '</blockquote>'
+            ),
+        }
+
+        mock_get.side_effect = [page_resp, oembed_resp]
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {
+                'url': 'https://www.instagram.com/reel/OEMBED123/',
+                'dish_type': 'dessert',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+
+        recipe_id = response.data['id']
+        created = Recipe.objects.get(id=recipe_id)
+        self.assertNotEqual(created.title.lower(), 'importerad länk')
+        self.assertIn('Originalreceptet är från https://www.instagram.com/reel/OEMBED123/', created.description)
+        self.assertEqual(created.image_url, 'https://cdn.example.com/thumb.jpg')
+        self.assertIn('pasta', created.ingredients)
+        self.assertIn('grädde', created.ingredients)
+        self.assertIn('Koka', created.steps)
+        self.assertIn('Blanda', created.steps)
+
     def test_api_token_obtain(self):
         response = self.client_api.post(
             '/api/auth/token/',
