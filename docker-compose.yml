@@ -12,6 +12,9 @@ services:
       - .env
     environment:
       - INSTAGRAM_SESSIONID=${INSTAGRAM_SESSIONID}
+      - INSTAGRAM_COOKIES=${INSTAGRAM_COOKIES}
+      - INSTAGRAM_CSRFTOKEN=${INSTAGRAM_CSRFTOKEN}
+      - INSTAGRAM_DS_USER_ID=${INSTAGRAM_DS_USER_ID}
     depends_on:
       - db
     restart: always

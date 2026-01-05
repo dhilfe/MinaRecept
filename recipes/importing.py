@@ -1145,13 +1145,50 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                 return '', None
 
         def _try_instagram_authenticated_json(target_url: str) -> tuple[str, str | None] | None:
-            """Attempt authenticated JSON fetch using INSTAGRAM_SESSIONID.
+            """Attempt authenticated JSON fetch using Instagram auth cookies.
 
             This is optional and only runs when public endpoints are blocked.
             """
             try:
-                sessionid = (os.environ.get('INSTAGRAM_SESSIONID') or '').strip()
-                if not sessionid:
+                import json
+
+                def _get_instagram_auth_cookies() -> dict[str, str]:
+                    """Return cookies dict for Instagram requests.
+
+                    Supports:
+                    - INSTAGRAM_COOKIES: full browser Cookie header string ("k=v; k2=v2")
+                    - INSTAGRAM_SESSIONID (+ optional INSTAGRAM_CSRFTOKEN / INSTAGRAM_DS_USER_ID)
+                    """
+                    raw = (os.environ.get('INSTAGRAM_COOKIES') or '').strip()
+                    cookies: dict[str, str] = {}
+                    if raw:
+                        for part in raw.split(';'):
+                            part = part.strip()
+                            if not part or '=' not in part:
+                                continue
+                            k, v = part.split('=', 1)
+                            k = k.strip()
+                            v = v.strip()
+                            if k and v:
+                                cookies[k] = v
+
+                    # Backwards compatible single-cookie config.
+                    sessionid = (os.environ.get('INSTAGRAM_SESSIONID') or '').strip()
+                    if sessionid and 'sessionid' not in cookies:
+                        cookies['sessionid'] = sessionid
+
+                    csrftoken = (os.environ.get('INSTAGRAM_CSRFTOKEN') or '').strip()
+                    if csrftoken and 'csrftoken' not in cookies:
+                        cookies['csrftoken'] = csrftoken
+
+                    ds_user_id = (os.environ.get('INSTAGRAM_DS_USER_ID') or '').strip()
+                    if ds_user_id and 'ds_user_id' not in cookies:
+                        cookies['ds_user_id'] = ds_user_id
+
+                    return cookies
+
+                cookies = _get_instagram_auth_cookies()
+                if not cookies.get('sessionid'):
                     return None
 
                 from urllib.parse import urlsplit
@@ -1186,11 +1223,31 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                     "Referer": target_url,
                 }
 
+                if cookies.get('csrftoken'):
+                    headers['X-CSRFToken'] = cookies['csrftoken']
+
+                def _maybe_parse_instagram_json(resp: object) -> dict | None:
+                    """Parse Instagram responses that may be JSON or `for (;;);{...}`."""
+                    try:
+                        text = (getattr(resp, 'text', '') or '').strip()
+                        if not text:
+                            return None
+
+                        if text.startswith('for (;;);'):
+                            text = text[len('for (;;);'):].lstrip()
+                        # Some endpoints return JSON but with non-json content-type.
+                        if text and text[0] in '{[':
+                            data = json.loads(text)
+                            return data if isinstance(data, dict) else None
+                        return None
+                    except Exception:
+                        return None
+
                 for json_url in json_candidates:
                     resp = requests.get(
                         json_url,
                         headers=headers,
-                        cookies={"sessionid": sessionid},
+                        cookies=cookies,
                         timeout=10,
                     )
 
@@ -1205,16 +1262,42 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                         continue
 
                     if ct and 'json' not in ct.lower():
-                        snippet = (getattr(resp, 'text', '') or '')[:200]
+                        # Instagram frequently returns application/x-javascript + `for (;;);{...}`
+                        data = _maybe_parse_instagram_json(resp)
+                        if not data:
+                            snippet = (getattr(resp, 'text', '') or '')[:200]
+                            logger.warning(
+                                "Instagram auth JSON non-JSON response (ct=%s url=%s body=%s)",
+                                ct,
+                                json_url,
+                                snippet,
+                            )
+                            continue
+                    else:
+                        try:
+                            data = resp.json()
+                        except Exception:
+                            data = _maybe_parse_instagram_json(resp)
+                            if not data:
+                                snippet = (getattr(resp, 'text', '') or '')[:200]
+                                logger.warning(
+                                    "Instagram auth JSON parse failed (ct=%s url=%s body=%s)",
+                                    ct,
+                                    json_url,
+                                    snippet,
+                                )
+                                continue
+
+                    # If Instagram returns an error payload, treat as a miss.
+                    if isinstance(data, dict) and data.get('error'):
                         logger.warning(
-                            "Instagram auth JSON non-JSON response (ct=%s url=%s body=%s)",
-                            ct,
+                            "Instagram auth JSON error payload (error=%s summary=%s url=%s)",
+                            data.get('error'),
+                            data.get('errorSummary'),
                             json_url,
-                            snippet,
                         )
                         continue
 
-                    data = resp.json()
                     cap, img = _extract_caption_from_instagram_json(data)
                     if cap or img:
                         return cap, img
@@ -1230,7 +1313,8 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
             Public endpoints can be blocked (JS shell). Instaloader often still works with a valid session.
             """
             sessionid = (os.environ.get('INSTAGRAM_SESSIONID') or '').strip()
-            if not sessionid:
+            raw_cookies = (os.environ.get('INSTAGRAM_COOKIES') or '').strip()
+            if not sessionid and not raw_cookies:
                 return None
 
             try:
@@ -1242,9 +1326,39 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                     return None
                 shortcode = m.group(1)
 
-                L = instaloader.Instaloader()
+                L = instaloader.Instaloader(quiet=True)
                 try:
-                    L.context._session.cookies.set('sessionid', sessionid, domain='.instagram.com')
+                    L.context.max_connection_attempts = 1
+                except Exception:
+                    pass
+                try:
+                    L.context.request_timeout = 10
+                except Exception:
+                    pass
+
+                cookies: dict[str, str] = {}
+                if raw_cookies:
+                    for part in raw_cookies.split(';'):
+                        part = part.strip()
+                        if not part or '=' not in part:
+                            continue
+                        k, v = part.split('=', 1)
+                        k = k.strip()
+                        v = v.strip()
+                        if k and v:
+                            cookies[k] = v
+                if sessionid and 'sessionid' not in cookies:
+                    cookies['sessionid'] = sessionid
+                csrftoken = (os.environ.get('INSTAGRAM_CSRFTOKEN') or '').strip()
+                if csrftoken and 'csrftoken' not in cookies:
+                    cookies['csrftoken'] = csrftoken
+                ds_user_id = (os.environ.get('INSTAGRAM_DS_USER_ID') or '').strip()
+                if ds_user_id and 'ds_user_id' not in cookies:
+                    cookies['ds_user_id'] = ds_user_id
+
+                try:
+                    for k, v in cookies.items():
+                        L.context._session.cookies.set(k, v, domain='.instagram.com')
                 except Exception:
                     pass
 
