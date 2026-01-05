@@ -43,6 +43,31 @@ class ImportImageAPITests(TestCase):
         self.assertEqual(resp.status_code, 400)
 
     @patch("recipes.api_views.ImageRecipeParser")
+    def test_import_image_empty_ocr_still_creates_placeholder_recipe(self, mock_parser_cls):
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {
+            "title": "",
+            "description": "",
+            "ingredients": "",
+            "steps": "",
+            "cooking_time": 0,
+            "servings": 0,
+        }
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "title": "Min titel"},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(data["title"], "Min titel")
+
+    @patch("recipes.api_views.ImageRecipeParser")
     def test_import_image_prefers_provided_title_when_ocr_is_mock(self, mock_parser_cls):
         mock_parser = mock_parser_cls.return_value
         mock_parser.parse_image.return_value = {

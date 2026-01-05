@@ -253,10 +253,13 @@ class RecipeViewSet(OwnedModelViewSet):
         if provided_title and (not title or title.lower().startswith("mockat recept")):
             title = provided_title
 
+        # If OCR couldn't extract anything meaningful, still create a placeholder recipe.
+        # This avoids "Kunde inte spara" from the Share Extension and lets the user edit later.
         if not title and not ingredients and not steps:
-            return Response(
-                {"detail": "Could not extract recipe from image."},
-                status=status.HTTP_400_BAD_REQUEST,
+            title = provided_title or "Importerad bild"
+            description = (
+                "Kunde inte tolka recept från bilden automatiskt. "
+                "Kontrollera att bilden är tydlig, eller fyll i receptet manuellt."
             )
 
         recipe = Recipe.objects.create(
@@ -269,6 +272,17 @@ class RecipeViewSet(OwnedModelViewSet):
             servings=max(1, servings) if servings else 4,
             dish_type=dish_type or Recipe._meta.get_field("dish_type").default,
         )
+
+        # Best-effort: save the uploaded image on the recipe as well.
+        try:
+            image_file.seek(0)
+        except Exception:
+            pass
+        try:
+            recipe.image.save(getattr(image_file, "name", "share.jpg"), image_file, save=True)
+        except Exception:
+            # Non-fatal: OCR text is still saved, and user can add an image later.
+            pass
 
         serializer = self.get_serializer(recipe)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
