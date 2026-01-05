@@ -620,7 +620,12 @@ class ShareViewController: SLComposeServiceViewController {
     
     private func uploadURL(_ url: URL, sourceText: String?) {
         shareLogger.info("Attempting import for shared URL: \(url.absoluteString, privacy: .public)")
-        let apiUrl = apiBaseURL.appendingPathComponent("recipes/import/")
+        // IMPORTANT: build the path with components to avoid encoding slashes ("recipes/import/")
+        // and to ensure trailing slash (Django APPEND_SLASH redirects can break POST semantics).
+        let apiUrl = apiBaseURL
+            .appendingPathComponent("recipes", isDirectory: true)
+            .appendingPathComponent("import", isDirectory: true)
+        shareLogger.info("[DEBUG] uploadURL endpoint: \(apiUrl.absoluteString, privacy: .public)")
         
         var request = URLRequest(url: apiUrl)
         request.httpMethod = "POST"
@@ -682,9 +687,12 @@ class ShareViewController: SLComposeServiceViewController {
 
                     if let data, let body = String(data: data, encoding: .utf8) {
                         print("Response body: \(body)")
+                        // Keep log size reasonable.
+                        let snippet = body.count > 800 ? String(body.prefix(800)) + "…" : body
+                        shareLogger.error("Import failed body: \(snippet, privacy: .public)")
                     }
 
-                    shareLogger.error("Import failed with HTTP \(httpResponse.statusCode)")
+                    shareLogger.error("Import failed with HTTP \(httpResponse.statusCode) at \(apiUrl.absoluteString, privacy: .public)")
 
                     DispatchQueue.main.async {
                         // Fallback: open app, where we can show better errors and retry.
@@ -839,7 +847,10 @@ class ShareViewController: SLComposeServiceViewController {
 
         let titleForImageImport = title.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let apiUrl = apiBaseURL.appendingPathComponent("recipes/import-image/")
+        let apiUrl = apiBaseURL
+            .appendingPathComponent("recipes", isDirectory: true)
+            .appendingPathComponent("import-image", isDirectory: true)
+        shareLogger.info("[DEBUG] uploadImage endpoint: \(apiUrl.absoluteString, privacy: .public)")
         var request = URLRequest(url: apiUrl)
         request.httpMethod = "POST"
 
