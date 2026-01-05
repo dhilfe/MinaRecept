@@ -95,4 +95,34 @@ class LandleyskokIngredientsFallbackTests(unittest.TestCase):
         self.assertEqual(data.title, "Pulled Pork")
         self.assertIn("1 msk malen spiskummin", data.ingredients)
 
+    def test_landleyskok_does_not_pick_comments_ul_as_ingredients(self):
+        html = b"""
+        <html>
+          <body>
+            <div id="recept-content"><h2>Recept p\xc3\xa5 Pulled Pork</h2></div>
+
+            <!-- Comments area (should be ignored) -->
+            <h3>Kommentarer</h3>
+            <ul>
+              <li>Anna: S\xc3\xa5 gott!</li>
+              <li>2026-01-05: Jag testade och det blev bra.</li>
+              <li>Svara</li>
+            </ul>
+
+            <!-- Actual ingredients list -->
+            <h3>Pulled Pork:</h3>
+            <ul>
+              <li>1 kg fl\xc3\xa4skkarr\xc3\xa9</li>
+              <li>1 msk malen spiskummin</li>
+              <li>33 cl \xc3\xb6l</li>
+            </ul>
+          </body>
+        </html>
+        """
+
+        data = import_recipe_from_html("https://www.landleyskok.se/recept/x#recept-content", html)
+        self.assertIn("1 kg fläskkarré", data.ingredients)
+        self.assertIn("1 msk malen spiskummin", data.ingredients)
+        self.assertNotIn("Anna: Så gott!", data.ingredients)
+
 

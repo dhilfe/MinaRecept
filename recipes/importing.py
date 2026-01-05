@@ -1005,6 +1005,20 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
                 # 2) If anchor is only a marker, scan forward in the DOM for the actual ingredient list.
                 # Limit search to the next N <ul> nodes to avoid traversing the whole page.
                 if not extracted and anchor is not None:
+                    # Ingredient lines typically start with a quantity and unit. Comments do not.
+                    qty_unit_re = re.compile(
+                        r"^\s*\d+(?:[.,]\d+)?\s*(?:"
+                        r"kg|g|mg|l|dl|cl|ml|msk|tsk|krm|st|styck|stycken"
+                        r")\b",
+                        re.IGNORECASE,
+                    )
+                    comment_snippets = [
+                        "kommentar",
+                        "kommentarer",
+                        "svara",
+                        "lämna en kommentar",
+                        "reply",
+                    ]
                     candidates: list[list[str]] = []
                     for ul in anchor.find_all_next("ul", limit=60):
                         items = [clean_text(li.get_text(" ", strip=True)) for li in ul.find_all("li")]
@@ -1013,15 +1027,26 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
                             continue
                         if looks_like_nav(items):
                             continue
+                        joined = " ".join(items).lower()
+                        if any(s in joined for s in comment_snippets):
+                            continue
+
+                        # Require that a meaningful fraction of lines look like ingredient rows.
+                        qty_hits = sum(1 for x in items if qty_unit_re.search(x or ""))
                         digit_hits = sum(1 for x in items if re.search(r"\d", x or ""))
                         unit_hits = sum(1 for x in items if unit_re.search(x or ""))
                         if digit_hits == 0 or unit_hits == 0:
+                            continue
+                        if qty_hits < 2:
+                            continue
+                        if qty_hits / max(1, len(items)) < 0.4:
                             continue
                         candidates.append(items)
 
                     if candidates:
                         candidates.sort(
                             key=lambda lst: (
+                                sum(1 for x in lst if qty_unit_re.search(x or "")),
                                 sum(1 for x in lst if unit_re.search(x or "")),
                                 sum(1 for x in lst if re.search(r"\d", x or "")),
                                 len(lst),
