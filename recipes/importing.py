@@ -1191,6 +1191,14 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                 if not cookies.get('sessionid'):
                     return None
 
+                try:
+                    logger.info(
+                        "Instagram auth cookie keys present: %s",
+                        ",".join(sorted(cookies.keys())),
+                    )
+                except Exception:
+                    pass
+
                 from urllib.parse import urlsplit
 
                 parts = urlsplit(target_url)
