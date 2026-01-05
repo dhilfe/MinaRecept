@@ -879,6 +879,27 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
                         title = possible
                         break
 
+        # If we didn't find it inside the anchor container, fall back to scanning headings globally.
+        if title and title.lower().startswith("så enkelt är det att göra "):
+            # Article title style -> strip the prefix.
+            rest = title[len("så enkelt är det att göra "):].strip()
+            if rest and rest == rest.lower():
+                rest = rest.title()
+            title = rest or title
+
+        if not title or title.lower().startswith("så enkelt är det att göra "):
+            for h in soup.find_all(["h1", "h2", "h3", "h4"]):
+                t = clean_text(h.get_text(" ", strip=True))
+                m = re.search(r"\bRecept\s+p[åa]\s+(.+)$", t, re.IGNORECASE)
+                if m:
+                    possible = clean_title(m.group(1))
+                    if possible:
+                        # Normalize common case for this recipe.
+                        if possible.strip().lower() == "pulled pork":
+                            possible = "Pulled Pork"
+                        title = possible
+                        break
+
         # First-class: Landleys uses microdata ingredients with <br> separators (no <ul>/<li>).
         #
         # NOTE: On the live site we have observed duplicate `itemprop` attributes in the HTML which

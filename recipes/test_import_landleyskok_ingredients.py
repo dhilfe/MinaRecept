@@ -171,4 +171,18 @@ class LandleyskokIngredientsFallbackTests(unittest.TestCase):
         self.assertIn("1 msk malen spiskummin", data.ingredients)
         self.assertIn("33 cl öl", data.ingredients)
 
+    def test_landleyskok_title_strips_article_prefix(self):
+        html = b"""
+        <html>
+          <head><title>S\xc3\xa5 enkelt \xc3\xa4r det att g\xc3\xb6ra pulled pork | Landleys k\xc3\xb6k</title></head>
+          <body>
+            <div id="recept-content"><h2>Recept p\xc3\xa5 pulled Pork</h2></div>
+            <p class="ingredient ingredients" itemprop="ingredients">1 kg fl\xc3\xa4skkarr\xc3\xa9<br />1 msk malen spiskummin</p>
+          </body>
+        </html>
+        """
+
+        data = import_recipe_from_html("https://www.landleyskok.se/recept/x#recept-content", html)
+        self.assertEqual(data.title, "Pulled Pork")
+
 
