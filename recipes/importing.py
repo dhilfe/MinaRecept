@@ -942,8 +942,11 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
                     # Still allow some common patterns like "33 cl" (unit handled) or "0,5 tsk" etc.
                     # If no unit, likely not an ingredient.
                     continue
-                # Skip obvious temperatures/times
-                if "°" in t or "grader" in tl or "min" in tl or "tim" in tl:
+                # Skip obvious temperatures/times.
+                # IMPORTANT: don't treat ingredient words like "spiskummin" as time ("min").
+                if "°" in t or "grader" in tl:
+                    continue
+                if re.search(r"\b(min|minuter|tim|timmar)\b", tl):
                     continue
                 if len(t) > 140:
                     continue
