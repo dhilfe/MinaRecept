@@ -1166,50 +1166,109 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                 if kind not in {'reel', 'p', 'tv'}:
                     return None
 
-                json_url = f"https://www.instagram.com/{kind}/{shortcode}/?__a=1&__d=dis"
-                resp = requests.get(
-                    json_url,
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-                        ),
-                        "Accept": "application/json, text/plain, */*",
-                        "X-Requested-With": "XMLHttpRequest",
-                        "Referer": target_url,
-                    },
-                    cookies={"sessionid": sessionid},
-                    timeout=10,
-                )
+                json_candidates = [
+                    f"https://www.instagram.com/{kind}/{shortcode}/?__a=1&__d=dis",
+                    f"https://www.instagram.com/{kind}/{shortcode}/?__a=1",
+                    f"https://www.instagram.com/p/{shortcode}/?__a=1&__d=dis",
+                    f"https://www.instagram.com/p/{shortcode}/?__a=1",
+                ]
 
-                ct = (getattr(resp, 'headers', {}) or {}).get('Content-Type')
-                if getattr(resp, 'status_code', 0) >= 400:
-                    logger.warning(
-                        "Instagram auth JSON fetch failed (status=%s ct=%s url=%s)",
-                        getattr(resp, 'status_code', None),
-                        ct,
+                headers = {
+                    "User-Agent": (
+                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+                    ),
+                    "Accept": "application/json, text/plain, */*",
+                    "X-Requested-With": "XMLHttpRequest",
+                    # Some deployments require these to avoid HTML/404 even with sessionid.
+                    "X-IG-App-ID": "936619743392459",
+                    "X-ASBD-ID": "129477",
+                    "Referer": target_url,
+                }
+
+                for json_url in json_candidates:
+                    resp = requests.get(
                         json_url,
+                        headers=headers,
+                        cookies={"sessionid": sessionid},
+                        timeout=10,
                     )
-                    return None
 
-                if ct and 'json' not in ct.lower():
-                    snippet = (getattr(resp, 'text', '') or '')[:200]
-                    logger.warning(
-                        "Instagram auth JSON non-JSON response (ct=%s url=%s body=%s)",
-                        ct,
-                        json_url,
-                        snippet,
-                    )
-                    return None
+                    ct = (getattr(resp, 'headers', {}) or {}).get('Content-Type')
+                    if getattr(resp, 'status_code', 0) >= 400:
+                        logger.warning(
+                            "Instagram auth JSON fetch failed (status=%s ct=%s url=%s)",
+                            getattr(resp, 'status_code', None),
+                            ct,
+                            json_url,
+                        )
+                        continue
 
-                data = resp.json()
-                cap, img = _extract_caption_from_instagram_json(data)
+                    if ct and 'json' not in ct.lower():
+                        snippet = (getattr(resp, 'text', '') or '')[:200]
+                        logger.warning(
+                            "Instagram auth JSON non-JSON response (ct=%s url=%s body=%s)",
+                            ct,
+                            json_url,
+                            snippet,
+                        )
+                        continue
+
+                    data = resp.json()
+                    cap, img = _extract_caption_from_instagram_json(data)
+                    if cap or img:
+                        return cap, img
+
+                return None
+            except Exception as e:
+                logger.warning("Instagram auth JSON exception (%s)", e)
+                return None
+
+        def _try_instagram_instaloader(target_url: str) -> tuple[str, str | None] | None:
+            """Try Instaloader with session cookie as a last resort.
+
+            Public endpoints can be blocked (JS shell). Instaloader often still works with a valid session.
+            """
+            sessionid = (os.environ.get('INSTAGRAM_SESSIONID') or '').strip()
+            if not sessionid:
+                return None
+
+            try:
+                import re
+                import instaloader
+
+                m = re.search(r"/(?:p|reel|tv)/([^/?#&]+)/?", target_url)
+                if not m:
+                    return None
+                shortcode = m.group(1)
+
+                L = instaloader.Instaloader()
+                try:
+                    L.context._session.cookies.set('sessionid', sessionid, domain='.instagram.com')
+                except Exception:
+                    pass
+
+                post = instaloader.Post.from_shortcode(L.context, shortcode)
+                cap = (getattr(post, 'caption', '') or '').strip()
+                img: str | None = None
+                for attr in ['url', 'display_url', 'thumbnail_url', 'thumbnail_src']:
+                    v = getattr(post, attr, None)
+                    if isinstance(v, str) and v:
+                        img = v
+                        break
+                    try:
+                        s = str(v)
+                        if s.startswith('http'):
+                            img = s
+                            break
+                    except Exception:
+                        pass
+
                 if not cap and not img:
-                    logger.warning("Instagram auth JSON had no caption/image (url=%s)", json_url)
                     return None
                 return cap, img
             except Exception as e:
-                logger.warning("Instagram auth JSON exception (%s)", e)
+                logger.warning("Instagram instaloader fallback failed (%s)", e)
                 return None
 
         # Final fallback: if everything public is blocked, try optional authenticated JSON.
@@ -1221,6 +1280,15 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                     caption = auth_caption
                 if auth_image and not image_url:
                     image_url = auth_image
+
+        if not caption:
+            il = _try_instagram_instaloader(url)
+            if il:
+                il_caption, il_image = il
+                if il_caption:
+                    caption = il_caption
+                if il_image and not image_url:
+                    image_url = il_image
 
         # Prefer the caption first line as title for IG (og:title is often "User on Instagram: \"...\"").
         if caption:
