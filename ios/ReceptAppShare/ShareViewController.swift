@@ -444,8 +444,44 @@ class ShareViewController: SLComposeServiceViewController {
         return ""
     }
 
+    private enum ImageUpload {
+        case jpeg(Data)
+        case png(Data)
+
+        var data: Data {
+            switch self {
+            case .jpeg(let d): return d
+            case .png(let d): return d
+            }
+        }
+
+        var contentType: String {
+            switch self {
+            case .jpeg: return "image/jpeg"
+            case .png: return "image/png"
+            }
+        }
+
+        var filename: String {
+            switch self {
+            case .jpeg: return "share.jpg"
+            case .png: return "share.png"
+            }
+        }
+    }
+
     private func uploadImage(_ image: UIImage, title: String) {
-        guard let jpeg = image.jpegData(compressionQuality: 0.85) else {
+        // Prefer PNG (lossless) for text screenshots when reasonably sized.
+        let payload: ImageUpload?
+        if let png = image.pngData(), png.count <= 8_000_000 {
+            payload = .png(png)
+        } else if let jpeg = image.jpegData(compressionQuality: 0.95) {
+            payload = .jpeg(jpeg)
+        } else {
+            payload = nil
+        }
+
+        guard let payload else {
             self.showEphemeralNoticeAndComplete(message: "Kunde inte läsa bild")
             return
         }
@@ -483,15 +519,15 @@ class ShareViewController: SLComposeServiceViewController {
         }
 
         append("--\(boundary)\r\n")
-        append("Content-Disposition: form-data; name=\"image\"; filename=\"share.jpg\"\r\n")
-        append("Content-Type: image/jpeg\r\n\r\n")
-        body.append(jpeg)
+        append("Content-Disposition: form-data; name=\"image\"; filename=\"\(payload.filename)\"\r\n")
+        append("Content-Type: \(payload.contentType)\r\n\r\n")
+        body.append(payload.data)
         append("\r\n")
         append("--\(boundary)--\r\n")
 
         request.httpBody = body
 
-        shareLogger.info("Attempting import from shared image (bytes=\(jpeg.count))")
+        shareLogger.info("Attempting import from shared image (bytes=\(payload.data.count))")
 
         let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }

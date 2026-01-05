@@ -1,6 +1,7 @@
 import os
 import base64
 import json
+import re
 from django.conf import settings
 from openai import OpenAI
 
@@ -19,6 +20,13 @@ class ImageRecipeParser:
             return self._mock_parse()
 
         try:
+            # Best-effort: preserve original content type if available (png is often better for text).
+            content_type = getattr(image_file, "content_type", "") or ""
+            if "png" in content_type.lower():
+                mime = "image/png"
+            else:
+                mime = "image/jpeg"
+
             # Encode image to base64
             base64_image = base64.b64encode(image_file.read()).decode('utf-8')
             
@@ -27,7 +35,7 @@ class ImageRecipeParser:
                 messages=[
                     {
                         "role": "system",
-                        "content": """You are a helpful assistant that extracts recipe information from images. 
+                        "content": """Du är en hjälpsam assistent som extraherar receptinformation från bilder (skärmdumpar/foton).
                         Output ONLY valid JSON with the following structure:
                         {
                             "title": "Recipe Title",
@@ -37,36 +45,56 @@ class ImageRecipeParser:
                             "cooking_time": 30,
                             "servings": 4
                         }
-                        If you cannot find a recipe, return empty strings/lists.
-                        Translate everything to Swedish if it's in another language.
+                        Om du ser någon ingredienslista eller instruktioner: returnera dem (även om du är osäker på vissa tecken).
+                        Returnera tomma fält ENDAST om bilden inte innehåller recepttext överhuvudtaget.
+                        Översätt allt till svenska om det är på ett annat språk.
                         """
                     },
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": "Extract the recipe from this image."},
+                            {"type": "text", "text": "Extrahera receptet från bilden. Ingredienser ska vara en rad per ingrediens, och steg ska vara en rad per steg."},
                             {
                                 "type": "image_url",
                                 "image_url": {
-                                    "url": f"data:image/jpeg;base64,{base64_image}"
+                                    "url": f"data:{mime};base64,{base64_image}",
+                                    "detail": "high"
                                 }
                             }
                         ]
                     }
                 ],
-                max_tokens=1000,
+                temperature=0,
+                max_tokens=1500,
                 response_format={ "type": "json_object" }
             )
             
             content = response.choices[0].message.content
             data = json.loads(content)
+
+            # Log basic diagnostics to help with debugging on the Pi.
+            try:
+                usage = getattr(response, "usage", None)
+                if usage is not None:
+                    print(f"OCR OpenAI usage: {usage}")
+            except Exception:
+                pass
+
+            # Guard against models returning ingredients/steps as a single string.
+            raw_ingredients = data.get("ingredients", [])
+            if isinstance(raw_ingredients, str):
+                raw_ingredients = [x.strip() for x in re.split(r"\\r?\\n+", raw_ingredients) if x.strip()]
+
+            raw_steps = data.get("steps", [])
+            if isinstance(raw_steps, str):
+                raw_steps = [x.strip() for x in re.split(r"\\r?\\n+", raw_steps) if x.strip()]
             
             # Ensure we return the expected format for our views
             return {
                 'title': data.get('title', ''),
                 'description': data.get('description', ''),
-                'ingredients': '\n'.join(data.get('ingredients', [])),
-                'steps': '\n'.join(data.get('steps', [])),
+                'ingredients': '\n'.join(raw_ingredients),
+                'steps': '\n'.join(raw_steps),
                 'cooking_time': data.get('cooking_time', 0),
                 'servings': data.get('servings', 4),
             }
