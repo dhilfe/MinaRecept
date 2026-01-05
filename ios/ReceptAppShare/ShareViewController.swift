@@ -497,7 +497,7 @@ class ShareViewController: SLComposeServiceViewController {
         task.resume()
     }
 
-    private func bestEffortTitleForImageImport(suggestedName: String?, item: NSSecureCoding?) -> String {
+    private func bestEffortTitleForImageImport(suggestedName: String?, item: Any?) -> String {
         func sanitize(_ raw: String) -> String {
             var s = Self.stripAfterPipe(raw)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
