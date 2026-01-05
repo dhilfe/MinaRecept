@@ -180,7 +180,11 @@ class ShareViewController: SLComposeServiceViewController {
                             self.uploadURL(url)
                         } else {
                             if let image = item as? UIImage {
-                                self.uploadImage(image)
+                                let inferredTitle = self.bestEffortTitleForImageImport(
+                                    suggestedName: provider.suggestedName,
+                                    item: item
+                                )
+                                self.uploadImage(image, title: inferredTitle)
                                 return
                             }
                             let cls = item.map { String(describing: type(of: $0)) } ?? "nil"
@@ -412,13 +416,41 @@ class ShareViewController: SLComposeServiceViewController {
         task.resume()
     }
 
-    private func uploadImage(_ image: UIImage) {
+    private func bestEffortTitleForImageImport(suggestedName: String?, item: NSSecureCoding?) -> String {
+        // 1) Whatever the user sees/typed in the share sheet
+        let primary = Self.stripAfterPipe(self.textView.text ?? self.contentText)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !primary.isEmpty { return primary }
+
+        // 2) Some apps populate the extension item's title
+        if let items = extensionContext?.inputItems as? [NSExtensionItem] {
+            if let t = items.compactMap({ $0.attributedTitle?.string }).first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+                return Self.stripAfterPipe(t).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        // 3) Provider suggested filename/title
+        if let name = suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            let cleaned = name.replacingOccurrences(of: "_", with: " ")
+            return cleaned
+        }
+
+        // 4) If the item is a file URL, use the filename (without extension)
+        if let url = item as? URL, url.isFileURL {
+            let base = url.deletingPathExtension().lastPathComponent
+            if !base.isEmpty { return base }
+        }
+
+        return ""
+    }
+
+    private func uploadImage(_ image: UIImage, title: String) {
         guard let jpeg = image.jpegData(compressionQuality: 0.85) else {
             self.showEphemeralNoticeAndComplete(message: "Kunde inte läsa bild")
             return
         }
 
-        let titleForImageImport = Self.stripAfterPipe(self.textView.text ?? self.contentText).trimmingCharacters(in: .whitespacesAndNewlines)
+        let titleForImageImport = title.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let apiUrl = apiBaseURL.appendingPathComponent("recipes/import-image/")
         var request = URLRequest(url: apiUrl)
