@@ -122,7 +122,7 @@ class ShareViewController: SLComposeServiceViewController {
         // Default: if we already found a URL, use it.
         if let url = preflightURL {
             shareLogger.info("Found URL in preflight text (len=\(preflightText.count)).")
-            finishOnce { self.uploadURL(url) }
+            finishOnce { self.uploadURL(url, sourceText: preflightText) }
             return
         }
 
@@ -131,7 +131,7 @@ class ShareViewController: SLComposeServiceViewController {
             guard idx < candidates.count else {
                 DispatchQueue.main.async {
                     if let url = self.extractURL(from: self.contentText) {
-                        finishOnce { self.uploadURL(url) }
+                        finishOnce { self.uploadURL(url, sourceText: sourceText ?? self.contentText) }
                     } else {
                         self.showEphemeralNoticeAndComplete(message: "Ingen länk hittades")
                     }
@@ -203,7 +203,7 @@ class ShareViewController: SLComposeServiceViewController {
             guard idx < candidates.count else {
                 DispatchQueue.main.async {
                     if let url = self.extractURL(from: self.contentText) {
-                        finishOnce { self.uploadURL(url) }
+                        finishOnce { self.uploadURL(url, sourceText: self.contentText) }
                     } else {
                         self.showEphemeralNoticeAndComplete(message: "Ingen länk hittades")
                     }
@@ -313,7 +313,7 @@ class ShareViewController: SLComposeServiceViewController {
                     }
 
                     if let url = self.extractURL(fromItem: item) ?? self.extractURL(from: self.contentText) {
-                        finishOnce { self.uploadURL(url) }
+                        finishOnce { self.uploadURL(url, sourceText: preflightText) }
                     } else {
                         tryUploadURLFromCandidates(idx + 1)
                     }
@@ -343,7 +343,7 @@ class ShareViewController: SLComposeServiceViewController {
                     }
 
                     if let url = self.extractURL(fromItem: item) ?? self.extractURL(from: self.contentText) {
-                        finishOnce { self.uploadURL(url) }
+                        finishOnce { self.uploadURL(url, sourceText: preflightText) }
                     } else {
                         tryUploadURLFromCandidates(idx + 1)
                     }
@@ -364,7 +364,7 @@ class ShareViewController: SLComposeServiceViewController {
                         return
                     }
                     if let url = object {
-                        finishOnce { self.uploadURL(url) }
+                        finishOnce { self.uploadURL(url, sourceText: preflightText) }
                     } else {
                         tryUploadURLFromCandidates(idx + 1)
                     }
@@ -509,7 +509,7 @@ class ShareViewController: SLComposeServiceViewController {
         return nil
     }
     
-    private func uploadURL(_ url: URL) {
+    private func uploadURL(_ url: URL, sourceText: String?) {
         shareLogger.info("Attempting import for shared URL: \(url.absoluteString, privacy: .public)")
         let apiUrl = apiBaseURL.appendingPathComponent("recipes/import/")
         
@@ -532,10 +532,14 @@ class ShareViewController: SLComposeServiceViewController {
         request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
         shareLogger.info("[DEBUG] Using shared token from App Group: \(token, privacy: .private)")
         
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "url": url.absoluteString,
             "dish_type": selectedDishType.id,
         ]
+        let trimmedSource = (sourceText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedSource.isEmpty {
+            body["source_text"] = trimmedSource
+        }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         
         let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in

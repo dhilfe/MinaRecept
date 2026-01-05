@@ -142,9 +142,15 @@ struct RecipeDetailView: View {
     private var ingredientsSection: some View {
         if !parsedIngredients.isEmpty {
             Section("Ingredienser") {
-                ForEach(parsedIngredients) { ing in
+                let all = parsedIngredients
+                ForEach(Array(all.enumerated()), id: \.element.id) { idx, ing in
                     let text = formatIngredient(ing)
-                    if isHeadingLine(ing: ing, text: text) {
+                    let nextText: String? = {
+                        guard idx + 1 < all.count else { return nil }
+                        return formatIngredient(all[idx + 1])
+                    }()
+
+                    if isHeadingLine(ing: ing, text: text, nextText: nextText) {
                         Text(text.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: ":")) + ":")
                             .font(.headline)
                             .padding(.vertical, 4)
@@ -212,15 +218,23 @@ struct RecipeDetailView: View {
         }
     }
 
-    private func isHeadingLine(ing: IngredientDTO, text: String) -> Bool {
-        // If it ends with ":" we always treat it as a heading.
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(":") { return true }
-        // If it's an unstructured line (no amount/unit) and has no digits, treat as a section heading.
+    private func isHeadingLine(ing: IngredientDTO, text: String, nextText: String?) -> Bool {
+        let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasAmountOrUnit = !((ing.amount ?? "").isEmpty && (ing.unit ?? "").isEmpty)
-        if hasAmountOrUnit { return false }
-        if text.rangeOfCharacter(from: .decimalDigits) != nil { return false }
-        // Avoid treating very short pantry items as headings
-        if text.count <= 3 { return false }
+
+        // Candidate signals
+        let endsWithColon = s.hasSuffix(":")
+        let isUnstructuredNoDigits = (!hasAmountOrUnit && s.rangeOfCharacter(from: .decimalDigits) == nil && s.count > 3)
+        let isCandidate = endsWithColon || isUnstructuredNoDigits
+        if !isCandidate { return false }
+
+        // Heuristic to avoid regressions like:
+        //   salt:
+        //   peppar:
+        // Treat as a heading only if it is followed by a non-heading ingredient line.
+        let next = (nextText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if next.isEmpty { return false }
+        if next.hasSuffix(":") { return false }
         return true
     }
 
