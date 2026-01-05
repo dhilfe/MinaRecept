@@ -12,7 +12,7 @@ class ImportImageAPITests(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
 
-    @patch("recipes.api_views.ImageRecipeParser")
+    @patch("recipes.ocr_service.ImageRecipeParser")
     def test_import_image_creates_recipe(self, mock_parser_cls):
         mock_parser = mock_parser_cls.return_value
         mock_parser.parse_image.return_value = {
@@ -42,7 +42,7 @@ class ImportImageAPITests(TestCase):
         resp = self.client.post("/api/recipes/import-image/", data={}, format="multipart")
         self.assertEqual(resp.status_code, 400)
 
-    @patch("recipes.api_views.ImageRecipeParser")
+    @patch("recipes.ocr_service.ImageRecipeParser")
     def test_import_image_empty_ocr_still_creates_placeholder_recipe(self, mock_parser_cls):
         mock_parser = mock_parser_cls.return_value
         mock_parser.parse_image.return_value = {
@@ -67,7 +67,7 @@ class ImportImageAPITests(TestCase):
         data = resp.json()
         self.assertEqual(data["title"], "Min titel")
 
-    @patch("recipes.api_views.ImageRecipeParser")
+    @patch("recipes.ocr_service.ImageRecipeParser")
     def test_import_image_prefers_provided_title_when_ocr_is_mock(self, mock_parser_cls):
         mock_parser = mock_parser_cls.return_value
         mock_parser.parse_image.return_value = {
@@ -93,7 +93,7 @@ class ImportImageAPITests(TestCase):
         self.assertEqual(data["title"], "Bacon och rödlökssnittar")
         self.assertEqual(data["dish_type"], "appetizer")
 
-    @patch("recipes.api_views.ImageRecipeParser")
+    @patch("recipes.ocr_service.ImageRecipeParser")
     def test_import_image_truncates_title_to_200(self, mock_parser_cls):
         mock_parser = mock_parser_cls.return_value
         mock_parser.parse_image.return_value = {
@@ -118,7 +118,7 @@ class ImportImageAPITests(TestCase):
         data = resp.json()
         self.assertEqual(len(data["title"]), 200)
 
-    @patch("recipes.api_views.ImageRecipeParser")
+    @patch("recipes.ocr_service.ImageRecipeParser")
     def test_import_image_salvages_multiline_title_blob(self, mock_parser_cls):
         mock_parser = mock_parser_cls.return_value
         # Simulate OCR dumping everything into title and leaving fields empty.
