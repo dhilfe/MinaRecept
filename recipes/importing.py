@@ -811,6 +811,10 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
             title = og_title_text
 
     if _is_instagram_url(url):
+        import logging
+
+        logger = logging.getLogger(__name__)
+
         # Prefer OG image for reels/posts.
         if og_image_url:
             image_url = og_image_url
@@ -823,6 +827,9 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
             caption = _extract_instagram_caption(og_desc_text)
         if not caption and og_title_text:
             caption = _extract_instagram_caption(og_title_text)
+
+        did_try_oembed = False
+        oembed_ok = False
 
         def _fetch_instagram_oembed(target_url: str) -> dict | None:
             """Fetch Instagram oEmbed (no auth) as a fallback for caption/thumbnail."""
@@ -909,9 +916,22 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                 return ""
 
         # If IG HTML didn't provide useful metadata, try oEmbed.
-        if (not caption) and (not og_desc_text) and (not og_title_text or ' on instagram:' in og_title_text.lower()):
+        should_try_oembed = (
+            not caption
+            and (
+                (not ingredients)
+                or (not steps)
+                or (not title)
+                or _is_generic_instagram_title(title)
+                or (og_title_text and ' on instagram:' in og_title_text.lower())
+            )
+        )
+
+        if should_try_oembed:
+            did_try_oembed = True
             oembed = _fetch_instagram_oembed(url)
             if oembed:
+                oembed_ok = True
                 thumb = clean_text(str(oembed.get("thumbnail_url") or ""))
                 if thumb and not image_url:
                     image_url = thumb
@@ -925,8 +945,9 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
 
                 if oe_caption:
                     caption = oe_caption
+
                 # If title still empty, use caption first line or fallback.
-                if not title:
+                if not title or _is_generic_instagram_title(title):
                     if caption:
                         cap_first = caption.splitlines()[0].strip()
                         if cap_first:
@@ -959,6 +980,18 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
         src_line = f"Originalreceptet är från {url}"
         if src_line not in (description or ''):
             description = f"{(description or '').strip()}\n\n{src_line}".strip()
+
+        # If we still ended up with essentially nothing, log loudly for production debugging.
+        if not title or (not ingredients and not steps and (description or '').strip() == src_line):
+            logger.error(
+                "Instagram import empty (did_try_oembed=%s oembed_ok=%s title=%r og_title=%r og_desc_len=%s caption_len=%s)",
+                did_try_oembed,
+                oembed_ok,
+                title,
+                og_title_text,
+                len(og_desc_text or ''),
+                len(caption or ''),
+            )
     
     # 4. Fallback for Kokaihop: ingredients from meta keywords
     def _extract_kokaihop_friendly_url(raw_url: str) -> str | None:
