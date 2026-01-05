@@ -879,6 +879,27 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
                         title = possible
                         break
 
+        # First-class: Landleys uses microdata recipeIngredient with <br> separators (no <ul>/<li>).
+        if not ingredients:
+            micro_els = soup.select('[itemprop="recipeIngredient"]')
+            micro_lines: list[str] = []
+            for el in micro_els:
+                raw = el.get_text("\n", strip=True)
+                for ln in raw.splitlines():
+                    t = clean_text(ln)
+                    if t:
+                        micro_lines.append(t)
+            # Deduplicate while preserving order
+            if micro_lines:
+                seen = set()
+                deduped: list[str] = []
+                for x in micro_lines:
+                    if x in seen:
+                        continue
+                    seen.add(x)
+                    deduped.append(x)
+                ingredients = deduped
+
         unit_words = [
             "kg", "g", "mg",
             "l", "dl", "cl", "ml",

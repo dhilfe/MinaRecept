@@ -151,4 +151,24 @@ class LandleyskokIngredientsFallbackTests(unittest.TestCase):
         self.assertIn("1 msk malen spiskummin", data.ingredients)
         self.assertNotIn("Anna: Så gott!", data.ingredients)
 
+    def test_landleyskok_microdata_recipeingredient_with_br_is_split(self):
+        html = b"""
+        <html>
+          <body>
+            <div id="recept-content"><h2>Recept p\xc3\xa5 Pulled Pork</h2></div>
+            <h2 class="ingredients">Pulled Pork:</h2>
+            <p class="ingredient ingredients" itemprop="recipeIngredient">
+              1 kg fl\xc3\xa4skkarr\xc3\xa9<br />
+              1 msk malen spiskummin<br />
+              33 cl \xc3\xb6l<br />
+            </p>
+          </body>
+        </html>
+        """
+
+        data = import_recipe_from_html("https://www.landleyskok.se/recept/x#recept-content", html)
+        self.assertIn("1 kg fläskkarré", data.ingredients)
+        self.assertIn("1 msk malen spiskummin", data.ingredients)
+        self.assertIn("33 cl öl", data.ingredients)
+
 
