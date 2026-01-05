@@ -820,6 +820,40 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
 
         logger = logging.getLogger(__name__)
 
+        def _get_instagram_auth_cookies() -> tuple[dict[str, str], bool]:
+            """Return (cookies, has_raw_cookie_string).
+
+            If INSTAGRAM_COOKIES is set, we parse that full Cookie header string.
+            Otherwise we fall back to INSTAGRAM_SESSIONID (+ optional csrftoken/ds_user_id).
+            """
+            raw = (os.environ.get('INSTAGRAM_COOKIES') or '').strip()
+            cookies: dict[str, str] = {}
+            has_raw = bool(raw)
+            if raw:
+                for part in raw.split(';'):
+                    part = part.strip()
+                    if not part or '=' not in part:
+                        continue
+                    k, v = part.split('=', 1)
+                    k = k.strip()
+                    v = v.strip()
+                    if k and v:
+                        cookies[k] = v
+
+            sessionid = (os.environ.get('INSTAGRAM_SESSIONID') or '').strip()
+            if sessionid and 'sessionid' not in cookies:
+                cookies['sessionid'] = sessionid
+
+            csrftoken = (os.environ.get('INSTAGRAM_CSRFTOKEN') or '').strip()
+            if csrftoken and 'csrftoken' not in cookies:
+                cookies['csrftoken'] = csrftoken
+
+            ds_user_id = (os.environ.get('INSTAGRAM_DS_USER_ID') or '').strip()
+            if ds_user_id and 'ds_user_id' not in cookies:
+                cookies['ds_user_id'] = ds_user_id
+
+            return cookies, has_raw
+
         # Prefer OG image for reels/posts.
         if og_image_url:
             image_url = og_image_url
@@ -955,6 +989,11 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                     "Accept-Language": "sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7",
                 }
 
+                cookies, has_raw_cookies = _get_instagram_auth_cookies()
+                # Only do authenticated embed attempts when the user explicitly provided a full cookie string.
+                # This avoids extra requests for setups that only use sessionid.
+                should_try_auth_embed = has_raw_cookies and bool(cookies.get('sessionid'))
+
                 for embed_url in embed_candidates:
                     resp = requests.get(embed_url, headers=headers, timeout=10)
                     status = getattr(resp, 'status_code', 0)
@@ -987,6 +1026,54 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
 
                     if e_title_text or e_desc_text or e_img_url:
                         return e_title_text, e_desc_text, e_img_url
+
+                    # If public embed is a JS shell, retry once with cookies.
+                    if should_try_auth_embed:
+                        try:
+                            auth_headers = dict(headers)
+                            auth_headers['Referer'] = target_url
+                            if cookies.get('csrftoken'):
+                                auth_headers['X-CSRFToken'] = cookies['csrftoken']
+                            auth_resp = requests.get(
+                                embed_url,
+                                headers=auth_headers,
+                                cookies=cookies,
+                                timeout=10,
+                            )
+                            a_status = getattr(auth_resp, 'status_code', 0)
+                            a_ct = (getattr(auth_resp, 'headers', {}) or {}).get('Content-Type')
+                            if a_status < 400:
+                                auth_soup = BeautifulSoup(auth_resp.content, 'html.parser')
+                                a_title = auth_soup.find('meta', property='og:title')
+                                a_desc = auth_soup.find('meta', property='og:description')
+                                a_img = auth_soup.find('meta', property='og:image')
+                                a_title_text = clean_title(a_title.get('content', '')) if a_title else ''
+                                a_desc_text = (a_desc.get('content', '') if a_desc else '')
+                                a_img_url = (a_img.get('content', '') if a_img else '')
+
+                                if not a_desc_text:
+                                    paras = [clean_text(p.get_text("\n", strip=True)) for p in auth_soup.find_all('p')]
+                                    paras = [p for p in paras if p]
+                                    if paras:
+                                        a_desc_text = "\n\n".join(paras)[:4000]
+
+                                if a_title_text or a_desc_text or a_img_url:
+                                    logger.info(
+                                        "Instagram authenticated embed succeeded (status=%s ct=%s url=%s)",
+                                        a_status,
+                                        a_ct,
+                                        embed_url,
+                                    )
+                                    return a_title_text, a_desc_text, a_img_url
+                            else:
+                                logger.warning(
+                                    "Instagram authenticated embed failed (status=%s ct=%s url=%s)",
+                                    a_status,
+                                    a_ct,
+                                    embed_url,
+                                )
+                        except Exception:
+                            pass
 
                     snippet = (getattr(resp, 'text', '') or '')[:200]
                     logger.warning(
@@ -1152,42 +1239,7 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
             try:
                 import json
 
-                def _get_instagram_auth_cookies() -> dict[str, str]:
-                    """Return cookies dict for Instagram requests.
-
-                    Supports:
-                    - INSTAGRAM_COOKIES: full browser Cookie header string ("k=v; k2=v2")
-                    - INSTAGRAM_SESSIONID (+ optional INSTAGRAM_CSRFTOKEN / INSTAGRAM_DS_USER_ID)
-                    """
-                    raw = (os.environ.get('INSTAGRAM_COOKIES') or '').strip()
-                    cookies: dict[str, str] = {}
-                    if raw:
-                        for part in raw.split(';'):
-                            part = part.strip()
-                            if not part or '=' not in part:
-                                continue
-                            k, v = part.split('=', 1)
-                            k = k.strip()
-                            v = v.strip()
-                            if k and v:
-                                cookies[k] = v
-
-                    # Backwards compatible single-cookie config.
-                    sessionid = (os.environ.get('INSTAGRAM_SESSIONID') or '').strip()
-                    if sessionid and 'sessionid' not in cookies:
-                        cookies['sessionid'] = sessionid
-
-                    csrftoken = (os.environ.get('INSTAGRAM_CSRFTOKEN') or '').strip()
-                    if csrftoken and 'csrftoken' not in cookies:
-                        cookies['csrftoken'] = csrftoken
-
-                    ds_user_id = (os.environ.get('INSTAGRAM_DS_USER_ID') or '').strip()
-                    if ds_user_id and 'ds_user_id' not in cookies:
-                        cookies['ds_user_id'] = ds_user_id
-
-                    return cookies
-
-                cookies = _get_instagram_auth_cookies()
+                cookies, _has_raw = _get_instagram_auth_cookies()
                 if not cookies.get('sessionid'):
                     return None
 
