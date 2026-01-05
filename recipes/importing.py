@@ -834,13 +834,21 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
 
     # 5. Generic HTML fallback for ingredients/steps (helps when JSON-LD is missing/blocked)
     def _extract_list_after_heading(keywords: list[str], list_tag: str) -> list[str]:
-        # Find headings or strong labels containing any keyword, then grab the next list.
+        # Find headings or strong labels matching any keyword (word-boundary where possible),
+        # then grab the next list. This avoids false positives like "Hitta recept efter ingrediens".
         lowered = [k.lower() for k in keywords]
+        patterns: list[re.Pattern] = []
+        for k in lowered:
+            # For single-word keywords, require word boundary.
+            if re.match(r"^[a-zåäö]+$", k, re.IGNORECASE):
+                patterns.append(re.compile(rf"\b{re.escape(k)}\b", re.IGNORECASE))
+            else:
+                patterns.append(re.compile(re.escape(k), re.IGNORECASE))
         for el in soup.find_all(["h1", "h2", "h3", "h4", "strong", "p", "span", "div"]):
             text = clean_text(el.get_text(" ", strip=True)).lower()
             if not text:
                 continue
-            if not any(k in text for k in lowered):
+            if not any(p.search(text) for p in patterns):
                 continue
             # Search next elements for a list
             next_list = el.find_next(list_tag)
@@ -848,6 +856,62 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
                 items = [clean_text(li.get_text(" ", strip=True)) for li in next_list.find_all("li")]
                 return [i for i in items if i]
         return []
+
+    # 5b. Landleyskok-specific fallback:
+    # Their pages often have long article text and the recipe section far down (anchor #recept-content),
+    # and menu text includes "Hitta recept efter ingrediens" which can trick generic heading matching.
+    if "landleyskok.se" in url:
+        scope = soup
+        scope_el = soup.select_one("#recept-content")
+        if scope_el is not None:
+            scope = scope_el
+
+        # Prefer the actual recipe title from "Recept på X" if present inside the recipe section.
+        # (Article title can be "Så enkelt är det att göra ...", which is not the recipe name.)
+        if scope is not None:
+            text_scope = clean_text(scope.get_text("\n", strip=True))
+            m = re.search(r"\bRecept\s+p[åa]\s+([^\n]+)", text_scope, re.IGNORECASE)
+            if m:
+                possible = clean_title(m.group(1))
+                if possible:
+                    title = possible
+
+        def looks_like_nav(lines: list[str]) -> bool:
+            if not lines:
+                return False
+            # Nav/menu items typically have no quantities.
+            digits = sum(1 for x in lines if re.search(r"\d", x))
+            return digits == 0
+
+        def choose_best_ingredient_list(root) -> list[str]:
+            candidates: list[list[str]] = []
+            for ul in root.find_all("ul"):
+                items = [clean_text(li.get_text(" ", strip=True)) for li in ul.find_all("li")]
+                items = [x for x in items if x]
+                if len(items) < 3:
+                    continue
+                # Heuristic: ingredient lists usually contain digits/units in many lines.
+                score = sum(1 for x in items if re.search(r"\d", x))
+                if score == 0:
+                    continue
+                candidates.append(items)
+
+            if not candidates:
+                return []
+
+            # Choose the list with highest "digit-line" count.
+            candidates.sort(key=lambda lst: sum(1 for x in lst if re.search(r"\d", x)), reverse=True)
+            best = candidates[0]
+            return best
+
+        # If ingredients are missing or clearly came from nav/menu, try to extract from recipe section.
+        if not ingredients or looks_like_nav(ingredients):
+            try:
+                extracted = choose_best_ingredient_list(scope if scope is not None else soup)
+                if extracted:
+                    ingredients = extracted
+            except Exception:
+                pass
 
     if not ingredients:
         # Microdata fallback
@@ -876,7 +940,8 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
                     if t:
                         plugin_ings.append(t)
             # Deduplicate while preserving order
-            if plugin_ings:
+            # Guard: avoid nav lists accidentally matching generic selectors
+            if plugin_ings and any(re.search(r"\d", x) for x in plugin_ings):
                 seen = set()
                 deduped: list[str] = []
                 for x in plugin_ings:
