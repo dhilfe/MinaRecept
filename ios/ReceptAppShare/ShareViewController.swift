@@ -122,6 +122,8 @@ class ShareViewController: SLComposeServiceViewController {
             }
 
             let provider = candidates[idx].provider
+            let suggestedName = provider.suggestedName
+            let registeredTypeIdentifiers = provider.registeredTypeIdentifiers
 
             // Prefer direct UIImage loading.
             if provider.canLoadObject(ofClass: UIImage.self) {
@@ -136,7 +138,7 @@ class ShareViewController: SLComposeServiceViewController {
                     }
                     if let image = object as? UIImage {
                         let inferredTitle = self.bestEffortTitleForImageImport(
-                            suggestedName: provider.suggestedName,
+                            suggestedName: suggestedName,
                             item: nil
                         )
                         finishOnce { self.uploadImage(image, title: inferredTitle) }
@@ -148,7 +150,7 @@ class ShareViewController: SLComposeServiceViewController {
             }
 
             // As a fallback, try to load image data if it conforms to UTType.image.
-            for typeId in provider.registeredTypeIdentifiers {
+            for typeId in registeredTypeIdentifiers {
                 guard let ut = UTType(typeId), ut.conforms(to: .image) else { continue }
                 provider.loadItem(forTypeIdentifier: typeId) { [weak self] item, error in
                     guard let self else { return }
@@ -162,7 +164,7 @@ class ShareViewController: SLComposeServiceViewController {
 
                     if let image = item as? UIImage {
                         let inferredTitle = self.bestEffortTitleForImageImport(
-                            suggestedName: provider.suggestedName,
+                            suggestedName: suggestedName,
                             item: item
                         )
                         finishOnce { self.uploadImage(image, title: inferredTitle) }
@@ -170,7 +172,7 @@ class ShareViewController: SLComposeServiceViewController {
                     }
                     if let url = item as? URL, url.isFileURL, let data = try? Data(contentsOf: url), let image = UIImage(data: data) {
                         let inferredTitle = self.bestEffortTitleForImageImport(
-                            suggestedName: provider.suggestedName,
+                            suggestedName: suggestedName,
                             item: url
                         )
                         finishOnce { self.uploadImage(image, title: inferredTitle) }
@@ -178,7 +180,7 @@ class ShareViewController: SLComposeServiceViewController {
                     }
                     if let data = item as? Data, let image = UIImage(data: data) {
                         let inferredTitle = self.bestEffortTitleForImageImport(
-                            suggestedName: provider.suggestedName,
+                            suggestedName: suggestedName,
                             item: item
                         )
                         finishOnce { self.uploadImage(image, title: inferredTitle) }
@@ -206,7 +208,6 @@ class ShareViewController: SLComposeServiceViewController {
             // Prefer explicit URL UTIs to avoid the "try NSURL for public.image" problem.
             let urlTypeIdentifiers: [String] = [
                 UTType.url.identifier,
-                UTType.webURL.identifier,
                 UTType.fileURL.identifier,
             ]
 

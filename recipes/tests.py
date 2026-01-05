@@ -344,8 +344,11 @@ class RecipeTests(TestCase):
         self.assertIn('My Insta Recipe\n\nIngredients:\n- 1 egg\n\nSteps:\n1. Cook it.', data['imported_text'])
         self.assertEqual(data['imported_image_url'], 'http://insta.com/image.jpg')
 
+    @patch('recipes.views.instaloader.Instaloader')
     @patch('recipes.views.requests.get')
-    def test_import_recipe_fallback_og(self, mock_get):
+    def test_import_recipe_fallback_og(self, mock_get, mock_instaloader):
+        # Ensure we don't hit the network via Instaloader during tests.
+        mock_instaloader.side_effect = Exception("Disable instaloader in unit test; use OG fallback")
         mock_response = MagicMock()
         mock_response.status_code = 200
         # Test with OG tags but no JSON-LD

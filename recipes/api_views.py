@@ -346,8 +346,12 @@ class RecipeViewSet(OwnedModelViewSet):
                 blob = provided_title_raw
             if blob:
                 s_title, s_desc, s_ing, s_steps = salvage_from_blob(blob)
-                if s_title and not title:
-                    title = s_title
+                # If title is clearly a blob (multiline or contains section markers), replace it with the salvaged title.
+                if s_title:
+                    lower_blob = blob.lower()
+                    should_replace_title = ("\n" in blob) or ("ingredien" in lower_blob) or ("gör" in lower_blob) or ("gor" in lower_blob)
+                    if not title or should_replace_title:
+                        title = s_title
                 if s_desc and not description:
                     description = s_desc
                 if s_ing and not ingredients:
