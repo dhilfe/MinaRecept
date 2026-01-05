@@ -127,11 +127,11 @@ class ShareViewController: SLComposeServiceViewController {
                                 return
                             }
 
-                            let text = self.coerceText(from: item)
-                            if let text, let url = self.extractURL(from: text) {
+                            if let url = self.extractURL(fromItem: item) ?? self.extractURL(from: self.contentText) {
                                 self.uploadURL(url)
                             } else {
-                                shareLogger.error("No URL found in shared text (\(typeId, privacy: .public)).")
+                                let cls = item.map { String(describing: type(of: $0)) } ?? "nil"
+                                shareLogger.error("No URL found in shared text (\(typeId, privacy: .public)). itemClass=\(cls, privacy: .public) contentTextLen=\(self.contentText.count)")
                                 DispatchQueue.main.async {
                                     self.showEphemeralNoticeAndComplete(message: "Ingen länk hittades")
                                 }
@@ -157,10 +157,11 @@ class ShareViewController: SLComposeServiceViewController {
                             return
                         }
 
-                        let text = self.coerceText(from: item)
-                        if let text, let url = self.extractURL(from: text) {
+                        if let url = self.extractURL(fromItem: item) ?? self.extractURL(from: self.contentText) {
                             self.uploadURL(url)
                         } else {
+                            let cls = item.map { String(describing: type(of: $0)) } ?? "nil"
+                            shareLogger.error("No URL found in shared item (\(typeId, privacy: .public)). itemClass=\(cls, privacy: .public) contentTextLen=\(self.contentText.count)")
                             DispatchQueue.main.async {
                                 self.showEphemeralNoticeAndComplete(message: "Ingen länk hittades")
                             }
@@ -173,7 +174,11 @@ class ShareViewController: SLComposeServiceViewController {
 
         // If we got here, we didn't find any usable attachments.
         DispatchQueue.main.async {
-            self.showEphemeralNoticeAndComplete(message: "Ingen länk hittades")
+            if let url = self.extractURL(from: self.contentText) {
+                self.uploadURL(url)
+            } else {
+                self.showEphemeralNoticeAndComplete(message: "Ingen länk hittades")
+            }
         }
     }
 
@@ -214,6 +219,69 @@ class ShareViewController: SLComposeServiceViewController {
         let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
         let matches = detector?.matches(in: text, options: [], range: NSRange(location: 0, length: text.utf16.count))
         return matches?.first?.url
+    }
+
+    private func extractURL(fromItem item: NSSecureCoding?) -> URL? {
+        if item == nil { return nil }
+
+        if let url = item as? URL {
+            // If it's a file URL, try to read contents and extract a web URL from it.
+            if url.isFileURL, let data = try? Data(contentsOf: url), data.count < 400_000 {
+                if let s = String(data: data, encoding: .utf8), let found = extractURL(from: s) { return found }
+                if let s = String(data: data, encoding: .utf16), let found = extractURL(from: s) { return found }
+            }
+            return url
+        }
+
+        if let text = coerceText(from: item), let found = extractURL(from: text) {
+            return found
+        }
+
+        // Some apps share a dictionary/array payload (e.g. a property list) containing the URL as a value.
+        if let dict = item as? NSDictionary {
+            return extractURL(fromAnyCollection: dict)
+        }
+        if let arr = item as? NSArray {
+            return extractURL(fromAnyCollection: arr)
+        }
+
+        if let data = item as? Data {
+            // Try JSON / property list -> then recurse.
+            if let obj = try? JSONSerialization.jsonObject(with: data),
+               let found = extractURL(fromAnyCollection: obj as AnyObject) {
+                return found
+            }
+            if let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+               let found = extractURL(fromAnyCollection: obj as AnyObject) {
+                return found
+            }
+        }
+
+        return nil
+    }
+
+    private func extractURL(fromAnyCollection obj: AnyObject) -> URL? {
+        // NSDictionary / NSArray traversal, best-effort.
+        if let s = obj as? String { return extractURL(from: s) }
+        if let url = obj as? URL { return url }
+        if let data = obj as? Data {
+            if let s = String(data: data, encoding: .utf8) { return extractURL(from: s) }
+            if let s = String(data: data, encoding: .utf16) { return extractURL(from: s) }
+            return nil
+        }
+        if let dict = obj as? NSDictionary {
+            for (_, v) in dict {
+                if let found = extractURL(fromAnyCollection: v as AnyObject) { return found }
+            }
+            return nil
+        }
+        if let arr = obj as? NSArray {
+            for v in arr {
+                if let found = extractURL(fromAnyCollection: v as AnyObject) { return found }
+            }
+            return nil
+        }
+        return nil
     }
 
     private func coerceText(from item: NSSecureCoding?) -> String? {
