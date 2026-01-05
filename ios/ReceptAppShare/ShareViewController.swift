@@ -498,28 +498,71 @@ class ShareViewController: SLComposeServiceViewController {
     }
 
     private func bestEffortTitleForImageImport(suggestedName: String?, item: NSSecureCoding?) -> String {
+        func sanitize(_ raw: String) -> String {
+            var s = Self.stripAfterPipe(raw)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // If the share sheet text includes multiple lines (common when apps share "everything"),
+            // only keep the first non-empty line as the title.
+            let lines = s
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .split(separator: "\n", omittingEmptySubsequences: true)
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+
+            if let first = lines.first {
+                s = first
+            }
+
+            // Cut off common section markers that shouldn't be part of the title.
+            let lowered = s
+                .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+                .lowercased()
+            let markers = ["ingredienser", "gor sa har", "gör sa här", "gör så här", "instruktioner", "tillagning"]
+            for m in markers {
+                if let r = lowered.range(of: m) {
+                    let idx = s.index(s.startIndex, offsetBy: lowered.distance(from: lowered.startIndex, to: r.lowerBound))
+                    s = String(s[..<idx]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    break
+                }
+            }
+
+            // Avoid sending a URL as the "title".
+            if let url = URL(string: s), url.scheme != nil, url.host != nil {
+                return ""
+            }
+
+            // Keep it reasonably small (backend will also cap to 200).
+            if s.count > 120 {
+                s = String(s.prefix(120)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return s
+        }
+
         // 1) Whatever the user sees/typed in the share sheet
-        let primary = Self.stripAfterPipe(self.textView.text ?? self.contentText)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let primary = sanitize(self.textView.text ?? self.contentText)
         if !primary.isEmpty { return primary }
 
         // 2) Some apps populate the extension item's title
         if let items = extensionContext?.inputItems as? [NSExtensionItem] {
             if let t = items.compactMap({ $0.attributedTitle?.string }).first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
-                return Self.stripAfterPipe(t).trimmingCharacters(in: .whitespacesAndNewlines)
+                let cleaned = sanitize(t)
+                if !cleaned.isEmpty { return cleaned }
             }
         }
 
         // 3) Provider suggested filename/title
         if let name = suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
             let cleaned = name.replacingOccurrences(of: "_", with: " ")
-            return cleaned
+            let s = sanitize(cleaned)
+            if !s.isEmpty { return s }
         }
 
         // 4) If the item is a file URL, use the filename (without extension)
         if let url = item as? URL, url.isFileURL {
             let base = url.deletingPathExtension().lastPathComponent
-            if !base.isEmpty { return base }
+            let s = sanitize(base)
+            if !s.isEmpty { return s }
         }
 
         return ""

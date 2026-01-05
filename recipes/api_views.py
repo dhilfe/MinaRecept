@@ -232,8 +232,9 @@ class RecipeViewSet(OwnedModelViewSet):
         if not image_file:
             return Response({"detail": "Missing image."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Recipe.title is max_length=200, so always cap any client-provided title.
-        provided_title = (request.data.get("title") or "").strip()[:200]
+        # Note: Recipe.title is max_length=200, but we keep the raw value for possible parsing/salvage.
+        provided_title_raw = (request.data.get("title") or "")
+        provided_title = provided_title_raw.strip()
 
         def safe_int(value, default: int) -> int:
             """
@@ -273,12 +274,86 @@ class RecipeViewSet(OwnedModelViewSet):
             logger.exception("Image import OCR failed (will create placeholder recipe)")
             data = {}
 
-        title = (data.get("title") or "").strip()[:200]
+        title = (data.get("title") or "").strip()
         description = (data.get("description") or "").strip()
         ingredients = (data.get("ingredients") or "").strip()
         steps = (data.get("steps") or "").strip()
         cooking_time = safe_int(data.get("cooking_time"), default=0)
         servings = safe_int(data.get("servings"), default=4)
+
+        def salvage_from_blob(blob: str):
+            """
+            Best-effort salvage when OCR or the client dumps most text into the title field.
+            Tries to split into title/ingredients/steps using Swedish section markers.
+            """
+            import re
+
+            raw = (blob or "").strip()
+            if not raw:
+                return "", "", "", ""
+
+            normalized = raw.replace("\r\n", "\n")
+            lines = [ln.strip() for ln in normalized.split("\n") if ln.strip()]
+            if not lines:
+                return "", "", "", ""
+
+            # Helper: find marker line index (case-insensitive, diacritics-insensitive-ish)
+            def find_line_index(patterns):
+                for i, ln in enumerate(lines):
+                    s = ln.lower()
+                    for p in patterns:
+                        if p in s:
+                            return i
+                return None
+
+            idx_ing = find_line_index(["ingredienser", "ingredients"])
+            idx_steps = find_line_index(["gör så här", "gor sa har", "instruktioner", "tillagning", "metod", "steg"])
+
+            # Title = first line up to 200 chars (later capped).
+            salv_title = lines[0]
+
+            salv_desc = ""
+            salv_ing = ""
+            salv_steps = ""
+
+            # If we have explicit sections, use them.
+            if idx_ing is not None:
+                ing_start = idx_ing + 1
+                ing_end = idx_steps if (idx_steps is not None and idx_steps > ing_start) else len(lines)
+                salv_ing = "\n".join(lines[ing_start:ing_end]).strip()
+
+            if idx_steps is not None:
+                steps_start = idx_steps + 1
+                salv_steps = "\n".join(lines[steps_start:]).strip()
+
+            # If still missing, try heuristic step lines like "1." / "1)"
+            if not salv_steps:
+                step_lines = [ln for ln in lines if re.match(r"^\s*\d+\s*[.)-]\s*\S+", ln)]
+                if step_lines:
+                    salv_steps = "\n".join(step_lines).strip()
+
+            # If we found a lot of content but no sections, keep the remainder as description.
+            if not salv_ing and not salv_steps and len(lines) > 1:
+                salv_desc = "\n".join(lines[1:]).strip()
+
+            return salv_title, salv_desc, salv_ing, salv_steps
+
+        # If OCR failed to populate ingredients/steps but dumped content into title/description,
+        # try to salvage. Prefer the OCR title blob, otherwise fall back to raw provided title.
+        if not ingredients and not steps:
+            blob = title if (len(title) > 120 or "\n" in title) else ""
+            if not blob and provided_title_raw:
+                blob = provided_title_raw
+            if blob:
+                s_title, s_desc, s_ing, s_steps = salvage_from_blob(blob)
+                if s_title and not title:
+                    title = s_title
+                if s_desc and not description:
+                    description = s_desc
+                if s_ing and not ingredients:
+                    ingredients = s_ing
+                if s_steps and not steps:
+                    steps = s_steps
 
         # If OCR fell back to the mock parser (no API key), prefer a user-provided title.
         if provided_title and (not title or title.lower().startswith("mockat recept")):
@@ -292,6 +367,11 @@ class RecipeViewSet(OwnedModelViewSet):
                 "Kunde inte tolka recept från bilden automatiskt. "
                 "Kontrollera att bilden är tydlig, eller fyll i receptet manuellt."
             )
+
+        # Cap title to model constraint to avoid 500s from DB truncation.
+        title = (title or "").strip()[:200]
+        if provided_title and not title:
+            title = provided_title.strip()[:200]
 
         recipe = Recipe.objects.create(
             user=request.user,

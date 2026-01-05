@@ -118,4 +118,31 @@ class ImportImageAPITests(TestCase):
         data = resp.json()
         self.assertEqual(len(data["title"]), 200)
 
+    @patch("recipes.api_views.ImageRecipeParser")
+    def test_import_image_salvages_multiline_title_blob(self, mock_parser_cls):
+        mock_parser = mock_parser_cls.return_value
+        # Simulate OCR dumping everything into title and leaving fields empty.
+        mock_parser.parse_image.return_value = {
+            "title": "Pasta med grönkålspesto\nIngredienser\n1 st Ägg\n2 dl Mjöl\nGör så här\n1. Blanda\n2. Stek",
+            "description": "",
+            "ingredients": "",
+            "steps": "",
+            "cooking_time": 0,
+            "servings": 4,
+        }
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "dish_type": "lunch_dinner"},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        # Title should be the first line.
+        self.assertEqual(data["title"], "Pasta med grönkålspesto")
+
 
