@@ -486,27 +486,46 @@ class ShareViewController: SLComposeServiceViewController {
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .lowercased()
 
+        func containsAny(_ needles: [String]) -> Bool {
+            for n in needles where s.contains(n) { return true }
+            return false
+        }
+
         // Order matters: pick more specific categories first.
-        if s.contains("efterratt") || s.contains("dessert") || s.contains("kaka") || s.contains("tarta") || s.contains("cookie") {
+        // Dessert/Bak/Fika
+        if containsAny([
+            "efterratt", "dessert", "fika",
+            "bak", "baka", "bakverk",
+            "kaka", "kladdkaka", "brownie",
+            "muffin", "cupcake",
+            "tarta", "paj", "cheesecake",
+            "semla", "kanelbulle", "bulle",
+            "lussekatt", "lussebull", "saffran",
+            "pepparkaka", "marang",
+            "glass", "sorbet",
+            "cookie"
+        ]) {
             return "dessert"
         }
-        if s.contains("forratt") || s.contains("appetizer") || s.contains("starter") {
+        // Förrätt / Tilltugg
+        if containsAny(["forratt", "appetizer", "starter", "snittar", "tapas", "tilltugg", "plockmat"]) {
             return "appetizer"
         }
-        if s.contains("frukost") || s.contains("breakfast") {
+        // Frukost
+        if containsAny(["frukost", "breakfast", "grot", "smoothie", "granola", "musli", "yoghurt", "overnight"]) {
             return "breakfast"
         }
         // If lunch/dinner is mentioned, it should win over broader tags like vegetarian.
         if s.contains("lunch") || s.contains("middag") || s.contains("dinner") {
             return "lunch_dinner"
         }
-        if s.contains("mellanmal") || s.contains("snack") {
+        if containsAny(["mellanmal", "snack"]) {
             return "snack"
         }
-        if s.contains("vegetar") || s.contains("vegetarian") || s.contains("vegan") {
+        if containsAny(["vegetar", "vegetarian", "vegan", "tofu", "halloumi", "quorn", "falafel", "lins", "linser"]) {
             return "vegetarian"
         }
-        if s.contains("fest") || s.contains("party") {
+        if containsAny(["fest", "party", "buffe", "bjudning"]) {
             return "party"
         }
 
@@ -532,7 +551,7 @@ final class DishTypeSelectionViewController: UITableViewController {
         self.selectedId = selectedId
         self.onSelect = onSelect
         super.init(style: .insetGrouped)
-        self.title = "Kategori 🥧"
+        self.title = "Kategori"
     }
 
     required init?(coder: NSCoder) {
