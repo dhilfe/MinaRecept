@@ -868,13 +868,22 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
 
         # Prefer the actual recipe title from "Recept på X" if present inside the recipe section.
         # (Article title can be "Så enkelt är det att göra ...", which is not the recipe name.)
+        def normalize_landley_title(raw: str) -> str:
+            s = clean_title(raw)
+            if not s:
+                return s
+            if s.strip().lower() == "pulled pork":
+                return "Pulled Pork"
+            # Default: keep as-is (avoid aggressive titlecasing of Swedish), but ensure first letter is uppercase.
+            return s[:1].upper() + s[1:] if s else s
+
         if scope is not None:
             # Avoid regex over the whole scope text (which may collapse newlines) – find the actual heading node.
             for h in scope.find_all(["h1", "h2", "h3", "h4"]):
                 t = clean_text(h.get_text(" ", strip=True))
                 m = re.search(r"\bRecept\s+p[åa]\s+(.+)$", t, re.IGNORECASE)
                 if m:
-                    possible = clean_title(m.group(1))
+                    possible = normalize_landley_title(m.group(1))
                     if possible:
                         title = possible
                         break
@@ -892,11 +901,8 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
                 t = clean_text(h.get_text(" ", strip=True))
                 m = re.search(r"\bRecept\s+p[åa]\s+(.+)$", t, re.IGNORECASE)
                 if m:
-                    possible = clean_title(m.group(1))
+                    possible = normalize_landley_title(m.group(1))
                     if possible:
-                        # Normalize common case for this recipe.
-                        if possible.strip().lower() == "pulled pork":
-                            possible = "Pulled Pork"
                         title = possible
                         break
 
