@@ -542,6 +542,45 @@ class ApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_instagram_uses_og_and_parses_caption(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        html = """
+        <html>
+        <head>
+            <title>Instagram</title>
+            <meta property="og:title" content="TestUser on Instagram: &quot;Asiatisk biffsallad&quot;" />
+            <meta property="og:description" content="TestUser on Instagram: &quot;Asiatisk biffsallad\n\nIngredienser:\n- 1 ägg\n- 2 dl mjöl\n\nGör så här:\n1. Blanda\n2. Stek&quot;" />
+            <meta property="og:image" content="https://example.com/thumb.jpg" />
+        </head>
+        <body></body>
+        </html>
+        """
+        mock_response.content = html.encode('utf-8')
+        mock_get.return_value = mock_response
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {
+                'url': 'https://www.instagram.com/reel/ABC/',
+                'dish_type': 'dessert',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['title'], 'Asiatisk biffsallad')
+
+        recipe_id = response.data['id']
+        created = Recipe.objects.get(id=recipe_id)
+        self.assertIn('1 ägg', created.ingredients)
+        self.assertIn('2 dl mjöl', created.ingredients)
+        self.assertIn('Blanda', created.steps)
+        self.assertIn('Stek', created.steps)
+        self.assertIn('Originalreceptet är från https://www.instagram.com/reel/ABC/', created.description)
+        self.assertEqual(created.image_url, 'https://example.com/thumb.jpg')
+
     def test_api_token_obtain(self):
         response = self.client_api.post(
             '/api/auth/token/',

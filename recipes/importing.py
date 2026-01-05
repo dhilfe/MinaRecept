@@ -559,7 +559,7 @@ def fetch_html(url: str, timeout: int = 10) -> tuple[str, bytes]:
         raise e
 
 
-def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
+def import_recipe_from_html(url: str, content: bytes, source_text: str | None = None) -> ImportedRecipeData:
     soup = BeautifulSoup(content, 'html.parser')
 
     def clean_title(raw_title: str) -> str:
@@ -587,6 +587,126 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
     og_image = soup.find('meta', property='og:image')
     if og_image:
         og_image_url = og_image.get('content', '') or None
+
+    def _is_instagram_url(u: str) -> bool:
+        return 'instagram.com' in (u or '').lower()
+
+    def _is_generic_instagram_title(t: str) -> bool:
+        low = (t or '').strip().lower()
+        return low in {
+            '',
+            'instagram',
+            'log in',
+            'log in • instagram',
+            'login • instagram',
+            'logga in',
+            'logga in • instagram',
+        }
+
+    def _extract_instagram_caption(text: str) -> str:
+        """Best-effort extract caption from IG og:title/og:description style strings."""
+        raw = (text or '').strip()
+        if not raw:
+            return ''
+        # Common patterns:
+        #   User on Instagram: “caption ...”
+        #   User on Instagram: "caption ..."
+        for marker in [' on Instagram: “', ' on Instagram: "']:
+            if marker in raw:
+                after = raw.split(marker, 1)[1]
+                after = after.rstrip('”').rstrip('"').strip()
+                return after
+        return raw
+
+    def _parse_caption_to_recipe(text: str) -> tuple[list[str], list[str], str]:
+        """Best-effort parse for captions (Instagram etc.)."""
+        import re
+
+        raw = (text or '').replace('\r\n', '\n').replace('\r', '\n')
+        raw = re.sub(r"https?://\S+", "", raw)
+        lines = [ln.strip() for ln in raw.split('\n') if ln.strip()]
+        if not lines:
+            return [], [], ''
+
+        def is_heading(line: str) -> bool:
+            l = line.strip()
+            if l.endswith(":"):
+                return True
+            low = l.lower().strip()
+            return low in {
+                "ingredienser",
+                "ingredients",
+                "gör så här",
+                "gor sa har",
+                "instruktioner",
+                "instructions",
+                "tillagning",
+            }
+
+        def normalize_heading(line: str) -> str:
+            return line.strip().rstrip(":").strip()
+
+        ing_start = None
+        step_start = None
+        for i, ln in enumerate(lines):
+            low = ln.lower().rstrip(":").strip()
+            if ing_start is None and ("ingredien" in low or low == "ingredients"):
+                ing_start = i + 1
+                continue
+            if step_start is None and (
+                "gör" in low
+                or "gor" in low
+                or "instruktion" in low
+                or low == "instructions"
+                or "tillag" in low
+            ):
+                step_start = i + 1
+                continue
+
+        def collect_until_next_heading(start_idx: int | None) -> list[str]:
+            if start_idx is None:
+                return []
+            out: list[str] = []
+            for ln in lines[start_idx:]:
+                if is_heading(ln):
+                    break
+                s = re.sub(r"^[-•*]+\s*", "", ln).strip()
+                if s:
+                    out.append(s)
+            return out
+
+        ing_lines = collect_until_next_heading(ing_start)
+        step_lines = collect_until_next_heading(step_start)
+
+        # If no explicit section markers, keep caption as description only.
+        if not ing_lines and not step_lines:
+            return [], [], raw.strip()
+
+        # Preserve headings like "Dressing:" by keeping lines ending with ":" inside the section.
+        def add_section_headings(start_idx: int | None, collected: list[str]) -> list[str]:
+            if start_idx is None:
+                return collected
+            out: list[str] = []
+            for ln in lines[start_idx:]:
+                # stop at next major section heading
+                if is_heading(ln) and (
+                    "ingredien" in ln.lower() or "gör" in ln.lower() or "gor" in ln.lower() or "instruktion" in ln.lower()
+                ):
+                    break
+                if ln.endswith(":") and normalize_heading(ln):
+                    out.append(normalize_heading(ln) + ":")
+                    continue
+                if is_heading(ln):
+                    break
+                s = re.sub(r"^[-•*]+\s*", "", ln).strip()
+                if s:
+                    out.append(s)
+            return out or collected
+
+        ing_lines = add_section_headings(ing_start, ing_lines)
+        step_lines = add_section_headings(step_start, step_lines)
+
+        return ing_lines, step_lines, ''
 
     recipe_data = extract_json_ld(soup)
     if recipe_data:
@@ -676,10 +796,56 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
             description = og_description.get('content', '')
 
     # 3. Title fallback (OG title)
+    og_title = soup.find('meta', property='og:title')
+    og_title_text = clean_title(og_title.get('content', '')) if og_title else ''
     if not title:
-        og_title = soup.find('meta', property='og:title')
-        if og_title:
-            title = clean_title(og_title.get('content', ''))
+        if og_title_text:
+            title = og_title_text
+
+    # Instagram-specific improvements: IG often returns <title>Instagram</title> for logged-out users.
+    if _is_instagram_url(url) and _is_generic_instagram_title(title):
+        title = ''
+        if og_title_text:
+            title = og_title_text
+
+    if _is_instagram_url(url):
+        # Prefer OG image for reels/posts.
+        if og_image_url:
+            image_url = og_image_url
+
+        # Try to extract caption from available fields.
+        og_desc = soup.find('meta', property='og:description')
+        og_desc_text = (og_desc.get('content', '') if og_desc else '')
+        caption = _extract_instagram_caption(source_text or '')
+        if not caption:
+            caption = _extract_instagram_caption(og_desc_text)
+        if not caption and og_title_text:
+            caption = _extract_instagram_caption(og_title_text)
+
+        # Prefer the caption first line as title for IG (og:title is often "User on Instagram: \"...\"").
+        if caption:
+            cap_first = caption.splitlines()[0].strip()
+            if cap_first and (not title or ' on instagram:' in title.lower()):
+                title = clean_title(cap_first)[:200]
+
+        # Parse ingredients/steps from caption if we don't have any.
+        if caption and (not ingredients or not steps):
+            cap_ings, cap_steps, cap_desc = _parse_caption_to_recipe(caption)
+            if cap_ings and not ingredients:
+                ingredients = cap_ings
+            if cap_steps and not steps:
+                steps = cap_steps
+            if cap_desc and not description:
+                description = cap_desc
+
+        # As a fallback, keep the caption as description so the user gets *something*.
+        if not description and caption:
+            description = caption
+
+        # Append original source line for traceability (requested UX).
+        src_line = f"Originalreceptet är från {url}"
+        if src_line not in (description or ''):
+            description = f"{(description or '').strip()}\n\n{src_line}".strip()
     
     # 4. Fallback for Kokaihop: ingredients from meta keywords
     def _extract_kokaihop_friendly_url(raw_url: str) -> str | None:
@@ -1235,10 +1401,10 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
     )
 
 
-def import_recipe_from_url(url: str) -> ImportedRecipeData:
+def import_recipe_from_url(url: str, source_text: str | None = None) -> ImportedRecipeData:
     url = _normalize_url(url)
     if not url:
         raise ValueError('Missing url')
 
     final_url, content = fetch_html(url)
-    return import_recipe_from_html(final_url, content)
+    return import_recipe_from_html(final_url, content, source_text=source_text)

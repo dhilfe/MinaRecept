@@ -175,6 +175,8 @@ class RecipeViewSet(OwnedModelViewSet):
         if not url:
             return Response({'detail': 'Missing url.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        source_text = (request.data.get('source_text') or '').strip()
+
         dish_type = (request.data.get('dish_type') or '').strip()
         # Backwards compatibility: older clients may send "everyday".
         if dish_type == 'everyday':
@@ -185,7 +187,7 @@ class RecipeViewSet(OwnedModelViewSet):
                 return Response({'detail': 'Invalid dish_type.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            imported = import_recipe_from_url(url)
+            imported = import_recipe_from_url(url, source_text=source_text or None)
         except Exception as e:
             return Response({'detail': f'Import failed: {e}'}, status=status.HTTP_400_BAD_REQUEST)
 
