@@ -496,28 +496,39 @@ class ShareViewController: SLComposeServiceViewController {
             let raw = Bundle.main.object(forInfoDictionaryKey: "API_BASE_URL") as? String,
             let url = URL(string: raw)
         {
+            shareLogger.info("[DEBUG] API_BASE_URL raw: \(raw, privacy: .public)")
             // Normalize base URL so it points to the API root (ends with /api/).
             // This avoids accidentally hitting the web UI and receiving HTML redirects.
-            var base = url
-
-            // Ensure trailing slash
-            if !base.absoluteString.hasSuffix("/") {
-                if let fixed = URL(string: base.absoluteString + "/") {
-                    base = fixed
+            func collapseSlashes(_ input: String) -> String {
+                // Collapse consecutive slashes in path-like strings.
+                // Note: URLs may contain "//" after scheme; we only use this for paths.
+                var s = input
+                while s.contains("//") {
+                    s = s.replacingOccurrences(of: "//", with: "/")
                 }
+                return s
             }
 
-            let path = base.path
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            var path = components?.path ?? url.path
+            path = collapseSlashes(path)
+
+            // Ensure path ends with /api/
             if path.hasSuffix("/api") {
-                if let fixed = URL(string: base.absoluteString + "/") {
-                    return fixed
-                }
-                return base
+                path = path + "/"
+            } else if !path.hasSuffix("/api/") {
+                path = (path.hasSuffix("/") ? path : path + "/") + "api/"
             }
-            if path.hasSuffix("/api/") {
-                return base
+
+            path = collapseSlashes(path)
+            components?.path = path
+            components?.query = nil
+            components?.fragment = nil
+            if let normalized = components?.url {
+                return normalized
             }
-            return base.appendingPathComponent("api/")
+            // Fallback: best-effort
+            return URL(string: (components?.string ?? raw)) ?? url
         }
 
         return URL(string: "http://localhost:8000/api/")!
@@ -622,9 +633,17 @@ class ShareViewController: SLComposeServiceViewController {
         shareLogger.info("Attempting import for shared URL: \(url.absoluteString, privacy: .public)")
         // IMPORTANT: build the path with components to avoid encoding slashes ("recipes/import/")
         // and to ensure trailing slash (Django APPEND_SLASH redirects can break POST semantics).
-        let apiUrl = apiBaseURL
+        var apiUrl = apiBaseURL
             .appendingPathComponent("recipes", isDirectory: true)
             .appendingPathComponent("import", isDirectory: true)
+
+        // Some servers treat double slashes as distinct paths -> 404.
+        if var c = URLComponents(url: apiUrl, resolvingAgainstBaseURL: false) {
+            while c.path.contains("//") {
+                c.path = c.path.replacingOccurrences(of: "//", with: "/")
+            }
+            apiUrl = c.url ?? apiUrl
+        }
         shareLogger.info("[DEBUG] uploadURL endpoint: \(apiUrl.absoluteString, privacy: .public)")
         
         var request = URLRequest(url: apiUrl)
@@ -847,9 +866,16 @@ class ShareViewController: SLComposeServiceViewController {
 
         let titleForImageImport = title.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let apiUrl = apiBaseURL
+        var apiUrl = apiBaseURL
             .appendingPathComponent("recipes", isDirectory: true)
             .appendingPathComponent("import-image", isDirectory: true)
+
+        if var c = URLComponents(url: apiUrl, resolvingAgainstBaseURL: false) {
+            while c.path.contains("//") {
+                c.path = c.path.replacingOccurrences(of: "//", with: "/")
+            }
+            apiUrl = c.url ?? apiUrl
+        }
         shareLogger.info("[DEBUG] uploadImage endpoint: \(apiUrl.absoluteString, privacy: .public)")
         var request = URLRequest(url: apiUrl)
         request.httpMethod = "POST"
