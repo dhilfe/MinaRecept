@@ -471,6 +471,21 @@ class ShareViewController: SLComposeServiceViewController {
     }
 
     private func uploadImage(_ image: UIImage, title: String) {
+        let pixelWidth = Int(image.size.width * image.scale)
+        let pixelHeight = Int(image.size.height * image.scale)
+        shareLogger.info("Shared image size: \(pixelWidth)x\(pixelHeight)px (scale=\(image.scale))")
+
+        // Heuristic: some apps (incl. Kokaihop) sometimes share a tiny thumbnail/app-icon image.
+        // OCR on those is pointless and just creates noisy placeholder recipes.
+        if min(pixelWidth, pixelHeight) > 0 && min(pixelWidth, pixelHeight) < 320 {
+            DispatchQueue.main.async {
+                self.showEphemeralNoticeAndComplete(
+                    message: "Kokaihop delade bara en liten bild (ingen recepttext). Ta en skärmdump med ingredienser/steg och dela den, eller dela länken från webben."
+                )
+            }
+            return
+        }
+
         // Prefer PNG (lossless) for text screenshots when reasonably sized.
         let payload: ImageUpload?
         if let png = image.pngData(), png.count <= 8_000_000 {
