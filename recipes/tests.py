@@ -720,6 +720,86 @@ class ApiTests(TestCase):
         self.assertIn('Rulla', created.steps)
         self.assertEqual(created.image_url, 'https://example.com/embedthumb.jpg')
 
+    @patch.dict('os.environ', {'INSTAGRAM_SESSIONID': 'fake-session'}, clear=False)
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_instagram_auth_json_fallback_when_public_blocked(self, mock_get):
+        # 1) Main page HTML is login/JS shell
+        page_resp = MagicMock()
+        page_resp.raise_for_status.return_value = None
+        page_resp.content = b"<html><head><title>Instagram</title></head><body>Login</body></html>"
+        page_resp.url = 'https://www.instagram.com/reel/DLQXLAUugPn/'
+
+        # 2) oEmbed returns HTML (200) -> treated as non-JSON
+        oembed_html = MagicMock()
+        oembed_html.status_code = 200
+        oembed_html.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        oembed_html.text = '<!DOCTYPE html><html>challenge</html>'
+        oembed_html.raise_for_status.return_value = None
+
+        oembed_html2 = MagicMock()
+        oembed_html2.status_code = 200
+        oembed_html2.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        oembed_html2.text = '<!DOCTYPE html><html>challenge</html>'
+        oembed_html2.raise_for_status.return_value = None
+
+        # 3) embed + captioned embed return 200 HTML without OG
+        embed_shell = MagicMock()
+        embed_shell.status_code = 200
+        embed_shell.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        embed_shell.text = '<!DOCTYPE html><html><head></head><body></body></html>'
+        embed_shell.content = embed_shell.text.encode('utf-8')
+
+        embed_shell2 = MagicMock()
+        embed_shell2.status_code = 200
+        embed_shell2.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        embed_shell2.text = '<!DOCTYPE html><html><head></head><body></body></html>'
+        embed_shell2.content = embed_shell2.text.encode('utf-8')
+
+        # 4) Authenticated JSON returns graphql caption + display_url
+        auth_json = MagicMock()
+        auth_json.status_code = 200
+        auth_json.headers = {'Content-Type': 'application/json'}
+        auth_json.raise_for_status.return_value = None
+        auth_json.json.return_value = {
+            'graphql': {
+                'shortcode_media': {
+                    'display_url': 'https://example.com/auththumb.jpg',
+                    'edge_media_to_caption': {
+                        'edges': [
+                            {'node': {'text': 'Receptnamn\n\nIngredienser:\n- kyckling\n- ris\n\nGör så här:\n1. Stek\n2. Servera'}}
+                        ]
+                    },
+                }
+            }
+        }
+
+        mock_get.side_effect = [
+            page_resp,
+            oembed_html,
+            oembed_html2,
+            embed_shell,
+            embed_shell2,
+            auth_json,
+        ]
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {
+                'url': 'https://www.instagram.com/reel/DLQXLAUugPn/?igsh=ZmF3YzV1YjU4M3l1',
+                'dish_type': 'dessert',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+
+        recipe_id = response.data['id']
+        created = Recipe.objects.get(id=recipe_id)
+        self.assertEqual(created.title, 'Receptnamn')
+        self.assertIn('kyckling', created.ingredients)
+        self.assertIn('Servera', created.steps)
+        self.assertEqual(created.image_url, 'https://example.com/auththumb.jpg')
+
     def test_api_token_obtain(self):
         response = self.client_api.post(
             '/api/auth/token/',

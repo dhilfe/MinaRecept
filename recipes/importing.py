@@ -816,6 +816,7 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
 
     if _is_instagram_url(url):
         import logging
+        import os
 
         logger = logging.getLogger(__name__)
 
@@ -1078,6 +1079,148 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                     caption = _extract_instagram_caption(e_title_text)
                 if not title and e_title_text:
                     title = e_title_text
+
+        def _extract_caption_from_instagram_json(data: object) -> tuple[str, str | None]:
+            """Return (caption, image_url) from known Instagram JSON shapes."""
+            try:
+                if not isinstance(data, dict):
+                    return '', None
+
+                def _preserve_caption(raw: object) -> str:
+                    # Keep newlines so downstream parsing (Ingredienser/Gör så här) works.
+                    s = str(raw or '')
+                    s = s.replace('\r\n', '\n').replace('\r', '\n')
+                    s = s.replace('\xa0', ' ')
+                    return s.strip()
+
+                # Newer __a=1 responses may contain "graphql".
+                graphql = data.get('graphql') if isinstance(data.get('graphql'), dict) else None
+                if graphql and isinstance(graphql.get('shortcode_media'), dict):
+                    media = graphql['shortcode_media']
+                    caption_edges = (
+                        media.get('edge_media_to_caption', {})
+                        if isinstance(media.get('edge_media_to_caption'), dict)
+                        else {}
+                    )
+                    edges = caption_edges.get('edges') if isinstance(caption_edges.get('edges'), list) else []
+                    cap = ''
+                    if edges:
+                        node = edges[0].get('node') if isinstance(edges[0], dict) else None
+                        if isinstance(node, dict):
+                            cap = _preserve_caption(node.get('text') or '')
+
+                    img = None
+                    if isinstance(media.get('display_url'), str) and media.get('display_url'):
+                        img = media.get('display_url')
+                    elif isinstance(media.get('thumbnail_src'), str) and media.get('thumbnail_src'):
+                        img = media.get('thumbnail_src')
+
+                    return cap, img
+
+                # Alternative shape: "items" list.
+                items = data.get('items') if isinstance(data.get('items'), list) else []
+                if items:
+                    item0 = items[0] if isinstance(items[0], dict) else {}
+                    cap = ''
+                    caption_obj = item0.get('caption')
+                    if isinstance(caption_obj, dict):
+                        cap = _preserve_caption(caption_obj.get('text') or '')
+
+                    img = None
+                    # Try common image fields
+                    for key in ['image_versions2', 'display_url', 'thumbnail_url', 'thumbnail_src']:
+                        v = item0.get(key)
+                        if isinstance(v, str) and v:
+                            img = v
+                            break
+                        if isinstance(v, dict) and isinstance(v.get('candidates'), list) and v['candidates']:
+                            cand0 = v['candidates'][0]
+                            if isinstance(cand0, dict) and isinstance(cand0.get('url'), str):
+                                img = cand0['url']
+                                break
+                    return cap, img
+
+                return '', None
+            except Exception:
+                return '', None
+
+        def _try_instagram_authenticated_json(target_url: str) -> tuple[str, str | None] | None:
+            """Attempt authenticated JSON fetch using INSTAGRAM_SESSIONID.
+
+            This is optional and only runs when public endpoints are blocked.
+            """
+            try:
+                sessionid = (os.environ.get('INSTAGRAM_SESSIONID') or '').strip()
+                if not sessionid:
+                    return None
+
+                from urllib.parse import urlsplit
+
+                parts = urlsplit(target_url)
+                path_parts = [p for p in (parts.path or '').split('/') if p]
+                if len(path_parts) < 2:
+                    return None
+
+                kind = path_parts[0].lower()
+                shortcode = path_parts[1]
+                if kind not in {'reel', 'p', 'tv'}:
+                    return None
+
+                json_url = f"https://www.instagram.com/{kind}/{shortcode}/?__a=1&__d=dis"
+                resp = requests.get(
+                    json_url,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+                        ),
+                        "Accept": "application/json, text/plain, */*",
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Referer": target_url,
+                    },
+                    cookies={"sessionid": sessionid},
+                    timeout=10,
+                )
+
+                ct = (getattr(resp, 'headers', {}) or {}).get('Content-Type')
+                if getattr(resp, 'status_code', 0) >= 400:
+                    logger.warning(
+                        "Instagram auth JSON fetch failed (status=%s ct=%s url=%s)",
+                        getattr(resp, 'status_code', None),
+                        ct,
+                        json_url,
+                    )
+                    return None
+
+                if ct and 'json' not in ct.lower():
+                    snippet = (getattr(resp, 'text', '') or '')[:200]
+                    logger.warning(
+                        "Instagram auth JSON non-JSON response (ct=%s url=%s body=%s)",
+                        ct,
+                        json_url,
+                        snippet,
+                    )
+                    return None
+
+                data = resp.json()
+                cap, img = _extract_caption_from_instagram_json(data)
+                if not cap and not img:
+                    logger.warning("Instagram auth JSON had no caption/image (url=%s)", json_url)
+                    return None
+                return cap, img
+            except Exception as e:
+                logger.warning("Instagram auth JSON exception (%s)", e)
+                return None
+
+        # Final fallback: if everything public is blocked, try optional authenticated JSON.
+        if not caption:
+            auth = _try_instagram_authenticated_json(url)
+            if auth:
+                auth_caption, auth_image = auth
+                if auth_caption:
+                    caption = auth_caption
+                if auth_image and not image_url:
+                    image_url = auth_image
 
         # Prefer the caption first line as title for IG (og:title is often "User on Instagram: \"...\"").
         if caption:
