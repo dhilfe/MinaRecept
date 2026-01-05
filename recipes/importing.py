@@ -861,10 +861,10 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
     # Their pages often have long article text and the recipe section far down (anchor #recept-content),
     # and menu text includes "Hitta recept efter ingrediens" which can trick generic heading matching.
     if "landleyskok.se" in url:
-        scope = soup
-        scope_el = soup.select_one("#recept-content")
-        if scope_el is not None:
-            scope = scope_el
+        # On Landleys, the #recept-content element is often just an anchor/title marker.
+        # The actual recipe card (ingredients/steps) may appear AFTER it in the DOM.
+        anchor = soup.select_one("#recept-content")
+        scope = anchor if anchor is not None else soup
 
         # Prefer the actual recipe title from "Recept på X" if present inside the recipe section.
         # (Article title can be "Så enkelt är det att göra ...", which is not the recipe name.)
@@ -996,9 +996,40 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
         if not ingredients:
             try:
                 root = scope if scope is not None else soup
+
+                # 1) Try inside anchor element itself (some pages include the full card inside it)
                 extracted = choose_best_ingredient_list(root)
                 if not extracted:
                     extracted = extract_quantity_lines(root)
+
+                # 2) If anchor is only a marker, scan forward in the DOM for the actual ingredient list.
+                # Limit search to the next N <ul> nodes to avoid traversing the whole page.
+                if not extracted and anchor is not None:
+                    candidates: list[list[str]] = []
+                    for ul in anchor.find_all_next("ul", limit=60):
+                        items = [clean_text(li.get_text(" ", strip=True)) for li in ul.find_all("li")]
+                        items = [x for x in items if x]
+                        if len(items) < 3:
+                            continue
+                        if looks_like_nav(items):
+                            continue
+                        digit_hits = sum(1 for x in items if re.search(r"\d", x or ""))
+                        unit_hits = sum(1 for x in items if unit_re.search(x or ""))
+                        if digit_hits == 0 or unit_hits == 0:
+                            continue
+                        candidates.append(items)
+
+                    if candidates:
+                        candidates.sort(
+                            key=lambda lst: (
+                                sum(1 for x in lst if unit_re.search(x or "")),
+                                sum(1 for x in lst if re.search(r"\d", x or "")),
+                                len(lst),
+                            ),
+                            reverse=True,
+                        )
+                        extracted = candidates[0]
+
                 if extracted:
                     ingredients = extracted
             except Exception:

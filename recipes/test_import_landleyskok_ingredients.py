@@ -67,4 +67,32 @@ class LandleyskokIngredientsFallbackTests(unittest.TestCase):
         self.assertIn("1 kg fläskkarré", data.ingredients)
         self.assertNotIn("Receptgeneratorn 2.0", data.ingredients)
 
+    def test_landleyskok_recipe_lists_can_be_after_recept_content_anchor(self):
+        # Real Landleys pages often use #recept-content as a marker with the actual recipe card after it.
+        html = b"""
+        <html>
+          <head><title>S\xc3\xa5 enkelt \xc3\xa4r det att g\xc3\xb6ra pulled pork | Landleys k\xc3\xb6k</title></head>
+          <body>
+            <div id="recept-content"><h2>Recept p\xc3\xa5 Pulled Pork</h2></div>
+            <div class="article-body">
+              <p>Text...</p>
+              <ul>
+                <li>Receptgeneratorn 2.0</li>
+                <li>Hitta recept efter ingrediens</li>
+              </ul>
+              <h3>Pulled Pork:</h3>
+              <ul>
+                <li>1 kg fl\xc3\xa4skkarr\xc3\xa9</li>
+                <li>1 msk malen spiskummin</li>
+                <li>33 cl \xc3\xb6l</li>
+              </ul>
+            </div>
+          </body>
+        </html>
+        """
+
+        data = import_recipe_from_html("https://www.landleyskok.se/recept/x#recept-content", html)
+        self.assertEqual(data.title, "Pulled Pork")
+        self.assertIn("1 msk malen spiskummin", data.ingredients)
+
 
