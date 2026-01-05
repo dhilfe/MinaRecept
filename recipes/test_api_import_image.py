@@ -93,4 +93,29 @@ class ImportImageAPITests(TestCase):
         self.assertEqual(data["title"], "Bacon och rödlökssnittar")
         self.assertEqual(data["dish_type"], "appetizer")
 
+    @patch("recipes.api_views.ImageRecipeParser")
+    def test_import_image_truncates_title_to_200(self, mock_parser_cls):
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {
+            "title": "A" * 500,
+            "description": "",
+            "ingredients": "",
+            "steps": "",
+            "cooking_time": 0,
+            "servings": 4,
+        }
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "dish_type": "dessert"},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(len(data["title"]), 200)
+
 

@@ -232,7 +232,8 @@ class RecipeViewSet(OwnedModelViewSet):
         if not image_file:
             return Response({"detail": "Missing image."}, status=status.HTTP_400_BAD_REQUEST)
 
-        provided_title = (request.data.get("title") or "").strip()
+        # Recipe.title is max_length=200, so always cap any client-provided title.
+        provided_title = (request.data.get("title") or "").strip()[:200]
 
         def safe_int(value, default: int) -> int:
             """
@@ -272,7 +273,7 @@ class RecipeViewSet(OwnedModelViewSet):
             logger.exception("Image import OCR failed (will create placeholder recipe)")
             data = {}
 
-        title = (data.get("title") or "").strip()
+        title = (data.get("title") or "").strip()[:200]
         description = (data.get("description") or "").strip()
         ingredients = (data.get("ingredients") or "").strip()
         steps = (data.get("steps") or "").strip()
