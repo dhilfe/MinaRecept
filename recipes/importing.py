@@ -879,9 +879,13 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
                         title = possible
                         break
 
-        # First-class: Landleys uses microdata recipeIngredient with <br> separators (no <ul>/<li>).
+        # First-class: Landleys uses microdata ingredients with <br> separators (no <ul>/<li>).
+        #
+        # NOTE: On the live site we have observed duplicate `itemprop` attributes in the HTML which
+        # means the parsed DOM may only keep the LAST one (often "ingredients"). Therefore we match
+        # both `recipeIngredient` and `ingredients`.
         if not ingredients:
-            micro_els = soup.select('[itemprop="recipeIngredient"]')
+            micro_els = soup.select('[itemprop="recipeIngredient"], [itemprop="ingredients"]')
             micro_lines: list[str] = []
             for el in micro_els:
                 raw = el.get_text("\n", strip=True)
@@ -1043,13 +1047,13 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
                     ]
                     # First try: scan for ingredient-like lines in following elements (checkbox-style markup).
                     lines: list[str] = []
-                    stop_words = ["kommentar", "kommentarer"]
-                    for el in anchor.find_all_next(["label", "li", "p", "span", "div"], limit=2500):
+                    # Stop scanning once we reach the comments heading/area.
+                    for el in anchor.find_all_next(["h2", "h3", "h4", "label", "li", "p", "span"], limit=3500):
                         t = clean_text(el.get_text(" ", strip=True))
                         if not t:
                             continue
                         tl = t.lower()
-                        if any(sw in tl for sw in stop_words):
+                        if el.name in ("h2", "h3", "h4") and ("kommentar" in tl or "kommentarer" in tl):
                             break
                         if any(b in tl for b in bad_snippets):
                             continue
