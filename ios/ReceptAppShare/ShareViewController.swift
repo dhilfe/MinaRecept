@@ -61,6 +61,25 @@ class ShareViewController: SLComposeServiceViewController {
             return
         }
 
+        // Some apps (including some recipe apps) don't attach a URL item at all.
+        // They may embed the URL in extension item text fields or in the compose text.
+        let extensionItemText = extensionItems
+            .compactMap { $0.attributedContentText?.string }
+            .joined(separator: "\n")
+        let preflightTextCandidates = [
+            self.contentText,
+            self.textView.text ?? "",
+            extensionItemText,
+        ].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        for t in preflightTextCandidates {
+            if let url = self.extractURL(from: t) {
+                shareLogger.info("Found URL in preflight text (len=\(t.count)).")
+                self.uploadURL(url)
+                return
+            }
+        }
+
         for item in extensionItems {
             guard let attachments = item.attachments else { continue }
 
