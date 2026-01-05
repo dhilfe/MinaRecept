@@ -177,6 +177,15 @@ class RecipeViewSet(OwnedModelViewSet):
 
         source_text = (request.data.get('source_text') or '').strip()
 
+        if 'instagram.com' in url.lower():
+            has_markers = any(k in source_text.lower() for k in ['ingredien', 'gör så', 'gor sa', 'instructions'])
+            logger.info(
+                "IG import request: url=%s source_text_len=%s has_markers=%s",
+                url,
+                len(source_text),
+                has_markers,
+            )
+
         dish_type = (request.data.get('dish_type') or '').strip()
         # Backwards compatibility: older clients may send "everyday".
         if dish_type == 'everyday':

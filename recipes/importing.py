@@ -854,6 +854,8 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
 
                 last_status: int | None = None
                 last_body: str | None = None
+                last_ct: str | None = None
+                last_url: str | None = None
                 last_error: str | None = None
 
                 for oembed_url in oembed_candidates:
@@ -869,6 +871,7 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                             },
                             timeout=10,
                         )
+                        last_url = oembed_url
                         raw_status = getattr(resp, 'status_code', None)
                         status: int | None = None
                         if isinstance(raw_status, int):
@@ -876,25 +879,47 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                         elif isinstance(raw_status, str) and raw_status.isdigit():
                             status = int(raw_status)
                         last_status = status
+                        last_ct = (getattr(resp, 'headers', {}) or {}).get('Content-Type')
 
                         if status is not None and status >= 400:
                             last_body = (getattr(resp, 'text', '') or '')[:300]
                         resp.raise_for_status()
-                        data = resp.json()
+
+                        # Instagram sometimes returns HTML challenges/rate-limit pages with 200.
+                        # Treat non-JSON as failure and log a short snippet.
+                        if last_ct and 'json' not in last_ct.lower():
+                            last_body = (getattr(resp, 'text', '') or '')[:300]
+                            raise ValueError(f"Non-JSON oEmbed response ct={last_ct}")
+
+                        try:
+                            data = resp.json()
+                        except Exception as e:
+                            last_body = (getattr(resp, 'text', '') or '')[:300]
+                            raise e
                         if isinstance(data, dict):
                             return data
                     except Exception as e:
                         last_error = f"{type(e).__name__}: {e}"
+                        if last_body is None:
+                            last_body = (getattr(resp, 'text', '') or '')[:300] if 'resp' in locals() else None
                         continue
 
                 if last_status is not None and last_status >= 400:
                     logger.warning(
-                        "Instagram oEmbed failed (status=%s body=%s)",
+                        "Instagram oEmbed failed (status=%s ct=%s url=%s body=%s)",
                         last_status,
+                        last_ct,
+                        last_url,
                         (last_body or "")[:300],
                     )
                 elif last_error:
-                    logger.warning("Instagram oEmbed failed (%s)", last_error)
+                    logger.warning(
+                        "Instagram oEmbed failed (%s ct=%s url=%s body=%s)",
+                        last_error,
+                        last_ct,
+                        last_url,
+                        (last_body or "")[:300],
+                    )
                 return None
             except Exception:
                 return None
@@ -915,36 +940,63 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                 if kind not in {'reel', 'p', 'tv'}:
                     return None
 
-                embed_url = f"https://www.instagram.com/{kind}/{shortcode}/embed/"
-                resp = requests.get(
-                    embed_url,
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-                        ),
-                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                        "Accept-Language": "sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7",
-                    },
-                    timeout=10,
-                )
-                if getattr(resp, 'status_code', 0) >= 400:
+                embed_candidates = [
+                    f"https://www.instagram.com/{kind}/{shortcode}/embed/",
+                    f"https://www.instagram.com/{kind}/{shortcode}/embed/captioned/",
+                ]
+
+                headers = {
+                    "User-Agent": (
+                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+                    ),
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7",
+                }
+
+                for embed_url in embed_candidates:
+                    resp = requests.get(embed_url, headers=headers, timeout=10)
+                    status = getattr(resp, 'status_code', 0)
+                    ct = (getattr(resp, 'headers', {}) or {}).get('Content-Type')
+
+                    if status >= 400:
+                        logger.warning(
+                            "Instagram embed fetch failed (status=%s ct=%s url=%s)",
+                            status,
+                            ct,
+                            embed_url,
+                        )
+                        continue
+
+                    embed_soup = BeautifulSoup(resp.content, 'html.parser')
+                    e_title = embed_soup.find('meta', property='og:title')
+                    e_desc = embed_soup.find('meta', property='og:description')
+                    e_img = embed_soup.find('meta', property='og:image')
+
+                    e_title_text = clean_title(e_title.get('content', '')) if e_title else ''
+                    e_desc_text = (e_desc.get('content', '') if e_desc else '')
+                    e_img_url = (e_img.get('content', '') if e_img else '')
+
+                    # Some embed variants put caption text as visible <p> content.
+                    if not e_desc_text:
+                        paras = [clean_text(p.get_text("\n", strip=True)) for p in embed_soup.find_all('p')]
+                        paras = [p for p in paras if p]
+                        if paras:
+                            e_desc_text = "\n\n".join(paras)[:4000]
+
+                    if e_title_text or e_desc_text or e_img_url:
+                        return e_title_text, e_desc_text, e_img_url
+
+                    snippet = (getattr(resp, 'text', '') or '')[:200]
                     logger.warning(
-                        "Instagram embed fetch failed (status=%s url=%s)",
-                        getattr(resp, 'status_code', None),
+                        "Instagram embed returned no OG/caption (status=%s ct=%s url=%s body=%s)",
+                        status,
+                        ct,
                         embed_url,
+                        snippet,
                     )
-                    return None
 
-                embed_soup = BeautifulSoup(resp.content, 'html.parser')
-                e_title = embed_soup.find('meta', property='og:title')
-                e_desc = embed_soup.find('meta', property='og:description')
-                e_img = embed_soup.find('meta', property='og:image')
-
-                e_title_text = clean_title(e_title.get('content', '')) if e_title else ''
-                e_desc_text = (e_desc.get('content', '') if e_desc else '')
-                e_img_url = (e_img.get('content', '') if e_img else '')
-                return e_title_text, e_desc_text, e_img_url
+                return None
             except Exception:
                 return None
 
