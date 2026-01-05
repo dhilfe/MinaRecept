@@ -582,6 +582,46 @@ class ApiTests(TestCase):
         self.assertEqual(created.image_url, 'https://example.com/thumb.jpg')
 
     @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_instagram_strips_query_params(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        html = """
+        <html>
+        <head>
+            <title>Instagram</title>
+            <meta property="og:title" content="TestUser on Instagram: &quot;Snabb nudelsallad&quot;" />
+            <meta property="og:description" content="TestUser on Instagram: &quot;Snabb nudelsallad\n\nIngredienser:\n- nudlar\n- soja\n\nGör så här:\n1. Koka\n2. Blanda&quot;" />
+            <meta property="og:image" content="https://example.com/thumb2.jpg" />
+        </head>
+        <body></body>
+        </html>
+        """
+        mock_response.content = html.encode('utf-8')
+        # Simulate requests returning the canonical URL (without query) after fetch.
+        mock_response.url = 'https://www.instagram.com/reel/DLQXLAUugPn/'
+        mock_get.return_value = mock_response
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {
+                'url': 'https://www.instagram.com/reel/DLQXLAUugPn/?igsh=ZmF3YzV1YjU4M3l1',
+                'dish_type': 'dessert',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+
+        recipe_id = response.data['id']
+        created = Recipe.objects.get(id=recipe_id)
+        self.assertEqual(created.title, 'Snabb nudelsallad')
+        self.assertIn('nudlar', created.ingredients)
+        self.assertIn('Blanda', created.steps)
+        # Source line should use canonical URL (no igsh query)
+        self.assertIn('Originalreceptet är från https://www.instagram.com/reel/DLQXLAUugPn/', created.description)
+        self.assertNotIn('igsh=', created.description)
+
+    @patch('recipes.importing.requests.get')
     def test_import_recipe_api_instagram_oembed_fallback_parses_caption(self, mock_get):
         """If Instagram HTML has no OG/caption, fall back to oEmbed for title/thumb/caption."""
         page_resp = MagicMock()

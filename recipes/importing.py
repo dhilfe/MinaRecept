@@ -546,14 +546,18 @@ def fetch_html(url: str, timeout: int = 10) -> tuple[str, bytes]:
 
     try:
         resp = fetch(url)
-        return url, resp.content
+        resp_url = getattr(resp, 'url', None)
+        final_url = resp_url if isinstance(resp_url, str) and resp_url else url
+        return final_url, resp.content
     except requests.RequestException as e:
         if 'www.' not in url:
             try:
                 scheme, rest = url.split('://', 1)
                 url_www = f"{scheme}://www.{rest}"
                 resp2 = fetch(url_www)
-                return url_www, resp2.content
+                resp2_url = getattr(resp2, 'url', None)
+                final_url = resp2_url if isinstance(resp2_url, str) and resp2_url else url_www
+                return final_url, resp2.content
             except requests.RequestException:
                 pass
         raise e
@@ -1551,6 +1555,17 @@ def import_recipe_from_url(url: str, source_text: str | None = None) -> Imported
     url = _normalize_url(url)
     if not url:
         raise ValueError('Missing url')
+
+    # Instagram share links often include tracking query params like ?igsh=...
+    # These can cause different (more restricted) responses and also confuse oEmbed.
+    if 'instagram.com' in url.lower():
+        try:
+            from urllib.parse import urlsplit, urlunsplit
+
+            parts = urlsplit(url)
+            url = urlunsplit((parts.scheme, parts.netloc, parts.path, '', ''))
+        except Exception:
+            pass
 
     final_url, content = fetch_html(url)
     return import_recipe_from_html(final_url, content, source_text=source_text)
