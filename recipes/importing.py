@@ -682,14 +682,153 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
             title = clean_title(og_title.get('content', ''))
     
     # 4. Fallback for Kokaihop: ingredients from meta keywords
-    if not ingredients and 'kokaihop.se' in url:
-        meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
+    def _extract_kokaihop_friendly_url(raw_url: str) -> str | None:
+        # Example:
+        # https://www.kokaihop.se/recept/bacon-och-rodlokssnittar
+        match = re.search(r"/recept/([^/?#]+)", raw_url)
+        return match.group(1) if match else None
+
+    def _fetch_kokaihop_recipe_via_graphql(friendly_url: str, timeout: int = 15) -> ImportedRecipeData | None:
+        """
+        Kokaihop is client-rendered: HTML often has empty <ul></ul>/<ol></ol>.
+        However, the site exposes a public GraphQL endpoint we can call:
+          POST https://www.kokaihop.se/graphql
+          showRecipe(friendlyUrl: ...)
+        """
+        gql_url = "https://www.kokaihop.se/graphql"
+        query = """
+        query ($friendlyUrl: String!) {
+          showRecipe(friendlyUrl: $friendlyUrl, sendUserEvents: false, changeDescField: true) {
+            statusCode
+            error
+            data {
+              title
+              recipeDescription
+              description { short long }
+              servings
+              totalTime
+              cookingTime
+              preparationTime
+              ovenTime
+              ingredients { isHeader name amount unit { name } }
+              cookingSteps
+            }
+          }
+        }
+        """
+        payload = {"query": query, "variables": {"friendlyUrl": friendly_url}}
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+            ),
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Referer": f"https://www.kokaihop.se/recept/{friendly_url}",
+        }
+        try:
+            resp = requests.post(gql_url, json=payload, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            body = resp.json()
+        except Exception:
+            return None
+
+        show = ((body or {}).get("data") or {}).get("showRecipe") or {}
+        data = show.get("data") or {}
+        if not isinstance(data, dict):
+            return None
+
+        gql_title = clean_title(str(data.get("title") or ""))
+        if not gql_title:
+            return None
+
+        gql_description = clean_text(
+            str(
+                data.get("recipeDescription")
+                or ((data.get("description") or {}) if isinstance(data.get("description"), dict) else {}).get("long")
+                or ((data.get("description") or {}) if isinstance(data.get("description"), dict) else {}).get("short")
+                or ""
+            )
+        )
+
+        gql_ingredients: list[str] = []
+        raw_ings = data.get("ingredients")
+        if isinstance(raw_ings, list):
+            for ing in raw_ings:
+                if not isinstance(ing, dict):
+                    continue
+                if ing.get("isHeader") is True:
+                    header = clean_text(str(ing.get("name") or ""))
+                    if header:
+                        gql_ingredients.append(header)
+                    continue
+
+                name = clean_text(str(ing.get("name") or ""))
+                amount = clean_text(str(ing.get("amount") or ""))
+                unit = ""
+                if isinstance(ing.get("unit"), dict):
+                    unit = clean_text(str(ing["unit"].get("name") or ""))
+                parts = [p for p in [amount, unit, name] if p]
+                line = " ".join(parts).strip()
+                if line:
+                    gql_ingredients.append(line)
+
+        gql_steps: list[str] = []
+        raw_steps = data.get("cookingSteps")
+        if isinstance(raw_steps, list):
+            for s in raw_steps:
+                t = clean_text(str(s or ""))
+                if t:
+                    gql_steps.append(t)
+
+        cooking_time = 0
+        for k in ("totalTime", "cookingTime", "preparationTime", "ovenTime"):
+            v = data.get(k)
+            if isinstance(v, int) and v > 0:
+                cooking_time = max(cooking_time, v)
+
+        servings = 4
+        servings_raw = data.get("servings") or ""
+        m = re.search(r"(\\d+)", str(servings_raw))
+        if m:
+            servings = int(m.group(1))
+
+        return ImportedRecipeData(
+            title=gql_title,
+            description=gql_description,
+            ingredients=gql_ingredients,
+            steps=gql_steps,
+            cooking_time=cooking_time if cooking_time > 0 else 30,
+            servings=servings,
+            image_url=None,
+        )
+
+    if "kokaihop.se" in url and (not ingredients or not steps):
+        friendly_url = _extract_kokaihop_friendly_url(url)
+        if friendly_url:
+            kokaihop_data = _fetch_kokaihop_recipe_via_graphql(friendly_url)
+            if kokaihop_data and (kokaihop_data.ingredients or kokaihop_data.steps):
+                # Keep the best image we already found (OG is usually great for Kokaihop)
+                kokaihop_data.image_url = image_url or og_image_url
+                return kokaihop_data
+
+    if not ingredients and "kokaihop.se" in url:
+        meta_keywords = soup.find("meta", attrs={"name": "keywords"})
         if meta_keywords:
-            content_str = meta_keywords.get('content', '')
+            content_str = meta_keywords.get("content", "")
             # Filter out generic keywords
-            ignore_words = {'mat', 'recept', 'matrecept', 'receptbilder', 'hitta recept', 'kokaihop', 'kokaihop.se', title.lower()}
-            
-            raw_list = [w.strip() for w in content_str.split(',')]
+            ignore_words = {
+                "mat",
+                "recept",
+                "matrecept",
+                "receptbilder",
+                "hitta recept",
+                "kokaihop",
+                "kokaihop.se",
+                title.lower(),
+            }
+
+            raw_list = [w.strip() for w in content_str.split(",")]
             for w in raw_list:
                 if w and w.lower() not in ignore_words:
                     ingredients.append(w)
