@@ -789,7 +789,7 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
 
         servings = 4
         servings_raw = data.get("servings") or ""
-        m = re.search(r"(\\d+)", str(servings_raw))
+        m = re.search(r"(\d+)", str(servings_raw))
         if m:
             servings = int(m.group(1))
 
