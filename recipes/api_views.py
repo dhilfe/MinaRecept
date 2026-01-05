@@ -236,6 +236,9 @@ class RecipeViewSet(OwnedModelViewSet):
         provided_title_raw = (request.data.get("title") or "")
         provided_title = provided_title_raw.strip()
 
+        source_url = (request.data.get("source_url") or "").strip()
+        source_text = (request.data.get("source_text") or "").strip()
+
         def safe_int(value, default: int) -> int:
             """
             Best-effort int conversion for OCR output.
@@ -280,6 +283,89 @@ class RecipeViewSet(OwnedModelViewSet):
         steps = (data.get("steps") or "").strip()
         cooking_time = safe_int(data.get("cooking_time"), default=0)
         servings = safe_int(data.get("servings"), default=4)
+
+        def parse_caption_to_recipe(text: str) -> tuple[str, str, str]:
+            """
+            Best-effort parse for Instagram captions.
+            Returns (ingredients, steps, description_extra).
+            """
+            import re
+
+            raw = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+            # Remove obvious URLs
+            raw = re.sub(r"https?://\\S+", "", raw)
+            lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
+            if not lines:
+                return "", "", ""
+
+            def is_heading(line: str) -> bool:
+                l = line.strip()
+                if l.endswith(":"):
+                    return True
+                # common headings
+                low = l.lower()
+                return low in {"ingredienser", "ingredients", "gör så här", "gor sa har", "instruktioner", "instructions", "tillagning"}
+
+            def normalize_heading(line: str) -> str:
+                return line.strip().rstrip(":").strip()
+
+            # Identify sections
+            ing_start = None
+            step_start = None
+            for i, ln in enumerate(lines):
+                low = ln.lower().rstrip(":").strip()
+                if ing_start is None and ("ingredien" in low or low == "ingredients"):
+                    ing_start = i + 1
+                    continue
+                if step_start is None and ("gör" in low or "gor" in low or "instruktion" in low or low == "instructions" or "tillag" in low):
+                    step_start = i + 1
+                    continue
+
+            def collect_until_next_heading(start_idx: int | None) -> list[str]:
+                if start_idx is None:
+                    return []
+                out: list[str] = []
+                for ln in lines[start_idx:]:
+                    if is_heading(ln):
+                        break
+                    # strip bullet markers
+                    s = re.sub(r"^[-•*]+\\s*", "", ln).strip()
+                    if s:
+                        out.append(s)
+                return out
+
+            ing_lines = collect_until_next_heading(ing_start)
+            step_lines = collect_until_next_heading(step_start)
+
+            # If no explicit section markers, keep caption as description only.
+            if not ing_lines and not step_lines:
+                return "", "", raw.strip()
+
+            # Preserve headings like "Dressing:" by converting to a plain heading line.
+            # We'll add them if we see lines ending with ":" in the relevant span.
+            def add_headings(start_idx: int | None, collected: list[str]) -> list[str]:
+                if start_idx is None:
+                    return collected
+                out: list[str] = []
+                for ln in lines[start_idx:]:
+                    if is_heading(ln) and ("ingredien" in ln.lower() or "gör" in ln.lower() or "instruktion" in ln.lower()):
+                        # Stop at next major section
+                        break
+                    if ln.endswith(":") and normalize_heading(ln):
+                        out.append(normalize_heading(ln) + ":")
+                        continue
+                    if is_heading(ln):
+                        break
+                    s = re.sub(r"^[-•*]+\\s*", "", ln).strip()
+                    if s:
+                        out.append(s)
+                # fallback to original collected if we got nothing
+                return out or collected
+
+            ing_lines = add_headings(ing_start, ing_lines)
+            step_lines = add_headings(step_start, step_lines)
+
+            return "\\n".join(ing_lines).strip(), "\\n".join(step_lines).strip(), ""
 
         def salvage_from_blob(blob: str):
             """
@@ -359,6 +445,25 @@ class RecipeViewSet(OwnedModelViewSet):
                 if s_steps and not steps:
                     steps = s_steps
 
+        # Instagram caption fallback: if we received source_text, try parsing it.
+        if source_text and (not ingredients or not steps):
+            parsed_ing, parsed_steps, desc_extra = parse_caption_to_recipe(source_text)
+            if parsed_ing and not ingredients:
+                ingredients = parsed_ing
+            if parsed_steps and not steps:
+                steps = parsed_steps
+            if desc_extra and not description:
+                description = desc_extra
+
+        # Append source URL line for traceability (requested UX).
+        if source_url:
+            line = f"Originalreceptet är från {source_url}"
+            if line not in (description or ""):
+                if description:
+                    description = f"{description}\n\n{line}"
+                else:
+                    description = line
+
         # If OCR fell back to the mock parser (no API key), prefer a user-provided title.
         if provided_title and (not title or title.lower().startswith("mockat recept")):
             title = provided_title
@@ -376,6 +481,9 @@ class RecipeViewSet(OwnedModelViewSet):
         title = (title or "").strip()[:200]
         if provided_title and not title:
             title = provided_title.strip()[:200]
+        if not title and source_text:
+            first = source_text.splitlines()[0].strip()
+            title = first[:200]
 
         recipe = Recipe.objects.create(
             user=request.user,

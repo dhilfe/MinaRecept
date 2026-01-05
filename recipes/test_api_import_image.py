@@ -145,4 +145,35 @@ class ImportImageAPITests(TestCase):
         # Title should be the first line.
         self.assertEqual(data["title"], "Pasta med grönkålspesto")
 
+    @patch("recipes.ocr_service.ImageRecipeParser")
+    def test_import_image_parses_source_text_for_instagram(self, mock_parser_cls):
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {"title": "", "description": "", "ingredients": "", "steps": "", "cooking_time": 0, "servings": 4}
+
+        caption = (
+            "Asiatisk biffsallad\n"
+            "Ingredienser:\n"
+            "- 1 st lime\n"
+            "- 2 msk soja\n"
+            "Gör så här:\n"
+            "1. Blanda.\n"
+            "2. Servera.\n"
+        )
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "source_url": "https://www.instagram.com/reel/ABC/", "source_text": caption},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(data["title"], "Asiatisk biffsallad")
+        self.assertIn("Originalreceptet är från https://www.instagram.com/reel/ABC/", data["description"])
+        self.assertIn("1 st lime", data["ingredients"])
+        self.assertIn("1. Blanda.", data["steps"])
+
 

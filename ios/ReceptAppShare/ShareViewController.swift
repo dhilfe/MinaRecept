@@ -72,25 +72,6 @@ class ShareViewController: SLComposeServiceViewController {
             work()
         }
 
-        // Some apps (including some recipe apps) don't attach a URL item at all.
-        // They may embed the URL in extension item text fields or in the compose text.
-        let extensionItemText = extensionItems
-            .compactMap { $0.attributedContentText?.string }
-            .joined(separator: "\n")
-        let preflightTextCandidates = [
-            self.contentText,
-            self.textView.text ?? "",
-            extensionItemText,
-        ].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-
-        for t in preflightTextCandidates {
-            if let url = self.extractURL(from: t) {
-                shareLogger.info("Found URL in preflight text (len=\(t.count)).")
-                finishOnce { self.uploadURL(url) }
-                return
-            }
-        }
-
         // Flatten all providers so we can do a URL-first pass across all attachments.
         struct AttachmentCandidate {
             let provider: NSItemProvider
@@ -106,6 +87,115 @@ class ShareViewController: SLComposeServiceViewController {
                 shareLogger.info("[DEBUG] attachment UTIs: \(utis, privacy: .public)")
                 candidates.append(.init(provider: provider, extensionItem: item))
             }
+        }
+
+        // Some apps (including some recipe apps) don't attach a URL item at all.
+        // They may embed the URL in extension item text fields or in the compose text.
+        let extensionItemText = extensionItems
+            .compactMap { $0.attributedContentText?.string }
+            .joined(separator: "\n")
+        let preflightTextCandidates = [
+            self.contentText,
+            self.textView.text ?? "",
+            extensionItemText,
+        ].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        let preflightText = preflightTextCandidates.joined(separator: "\n\n")
+        let preflightURL = preflightTextCandidates.compactMap { self.extractURL(from: $0) }.first
+
+        let hasPotentialImage = candidates.contains { c in
+            c.provider.canLoadObject(ofClass: UIImage.self) || c.provider.registeredTypeIdentifiers.contains(where: { UTType($0)?.conforms(to: .image) == true })
+        }
+
+        // Instagram: prefer image import (thumbnail) + caption parsing, if we have an image.
+        if
+            let url = preflightURL,
+            let host = url.host?.lowercased(),
+            host.contains("instagram.com"),
+            hasPotentialImage
+        {
+            shareLogger.info("Instagram URL detected; will prefer image import if image is available.")
+            tryUploadImageFromCandidatesWithContext(0, sourceURL: url, sourceText: preflightText)
+            return
+        }
+
+        // Default: if we already found a URL, use it.
+        if let url = preflightURL {
+            shareLogger.info("Found URL in preflight text (len=\(preflightText.count)).")
+            finishOnce { self.uploadURL(url) }
+            return
+        }
+
+        func tryUploadImageFromCandidatesWithContext(_ idx: Int, sourceURL: URL?, sourceText: String?) {
+            if didFinish { return }
+            guard idx < candidates.count else {
+                DispatchQueue.main.async {
+                    if let url = self.extractURL(from: self.contentText) {
+                        finishOnce { self.uploadURL(url) }
+                    } else {
+                        self.showEphemeralNoticeAndComplete(message: "Ingen länk hittades")
+                    }
+                }
+                return
+            }
+
+            let provider = candidates[idx].provider
+            let suggestedName = provider.suggestedName
+            let registeredTypeIdentifiers = provider.registeredTypeIdentifiers
+
+            if provider.canLoadObject(ofClass: UIImage.self) {
+                _ = provider.loadObject(ofClass: UIImage.self) { [weak self] object, error in
+                    guard let self else { return }
+                    if didFinish { return }
+                    if let error {
+                        shareLogger.error("Failed to load UIImage object: \(String(describing: error), privacy: .public)")
+                        tryUploadImageFromCandidatesWithContext(idx + 1, sourceURL: sourceURL, sourceText: sourceText)
+                        return
+                    }
+                    if let image = object as? UIImage {
+                        let inferredTitle = self.bestEffortTitleForImageImport(
+                            suggestedName: suggestedName,
+                            item: nil
+                        )
+                        finishOnce { self.uploadImage(image, title: inferredTitle, sourceURL: sourceURL, sourceText: sourceText) }
+                    } else {
+                        tryUploadImageFromCandidatesWithContext(idx + 1, sourceURL: sourceURL, sourceText: sourceText)
+                    }
+                }
+                return
+            }
+
+            for typeId in registeredTypeIdentifiers {
+                guard let ut = UTType(typeId), ut.conforms(to: .image) else { continue }
+                provider.loadItem(forTypeIdentifier: typeId) { [weak self] item, error in
+                    guard let self else { return }
+                    if didFinish { return }
+                    if let error {
+                        shareLogger.error("Failed to load image item (\(typeId, privacy: .public)): \(String(describing: error), privacy: .public)")
+                        tryUploadImageFromCandidatesWithContext(idx + 1, sourceURL: sourceURL, sourceText: sourceText)
+                        return
+                    }
+                    if let image = item as? UIImage {
+                        let inferredTitle = self.bestEffortTitleForImageImport(suggestedName: suggestedName, item: item)
+                        finishOnce { self.uploadImage(image, title: inferredTitle, sourceURL: sourceURL, sourceText: sourceText) }
+                        return
+                    }
+                    if let url = item as? URL, url.isFileURL, let data = try? Data(contentsOf: url), let image = UIImage(data: data) {
+                        let inferredTitle = self.bestEffortTitleForImageImport(suggestedName: suggestedName, item: url)
+                        finishOnce { self.uploadImage(image, title: inferredTitle, sourceURL: sourceURL, sourceText: sourceText) }
+                        return
+                    }
+                    if let data = item as? Data, let image = UIImage(data: data) {
+                        let inferredTitle = self.bestEffortTitleForImageImport(suggestedName: suggestedName, item: item)
+                        finishOnce { self.uploadImage(image, title: inferredTitle, sourceURL: sourceURL, sourceText: sourceText) }
+                        return
+                    }
+                    tryUploadImageFromCandidatesWithContext(idx + 1, sourceURL: sourceURL, sourceText: sourceText)
+                }
+                return
+            }
+
+            tryUploadImageFromCandidatesWithContext(idx + 1, sourceURL: sourceURL, sourceText: sourceText)
         }
 
         func tryUploadImageFromCandidates(_ idx: Int) {
@@ -595,7 +685,7 @@ class ShareViewController: SLComposeServiceViewController {
         }
     }
 
-    private func uploadImage(_ image: UIImage, title: String) {
+    private func uploadImage(_ image: UIImage, title: String, sourceURL: URL? = nil, sourceText: String? = nil) {
         let pixelWidth = Int(image.size.width * image.scale)
         let pixelHeight = Int(image.size.height * image.scale)
         shareLogger.info("Shared image size: \(pixelWidth)x\(pixelHeight)px (scale=\(image.scale))")
@@ -656,6 +746,18 @@ class ShareViewController: SLComposeServiceViewController {
             append("--\(boundary)\r\n")
             append("Content-Disposition: form-data; name=\"title\"\r\n\r\n")
             append("\(titleForImageImport)\r\n")
+        }
+
+        if let sourceURL {
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"source_url\"\r\n\r\n")
+            append("\(sourceURL.absoluteString)\r\n")
+        }
+
+        if let sourceText, !sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"source_text\"\r\n\r\n")
+            append("\(sourceText)\r\n")
         }
 
         append("--\(boundary)\r\n")

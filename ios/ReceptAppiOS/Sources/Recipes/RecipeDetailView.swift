@@ -8,6 +8,8 @@ struct RecipeDetailView: View {
     @State private var errorMessage: String? = nil
     @State private var showSuccessAlert = false
     @State private var showEditSheet = false
+    @State private var checkedIngredientIds: Set<String> = []
+    @State private var checkedStepKeys: Set<String> = []
 
     init(recipe: RecipeDTO) {
         _recipe = State(initialValue: recipe)
@@ -141,7 +143,28 @@ struct RecipeDetailView: View {
         if !parsedIngredients.isEmpty {
             Section("Ingredienser") {
                 ForEach(parsedIngredients) { ing in
-                    Text(formatIngredient(ing))
+                    let text = formatIngredient(ing)
+                    if isHeadingLine(ing: ing, text: text) {
+                        Text(text.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: ":")) + ":")
+                            .font(.headline)
+                            .padding(.vertical, 4)
+                    } else {
+                        Button {
+                            if checkedIngredientIds.contains(ing.id) {
+                                checkedIngredientIds.remove(ing.id)
+                            } else {
+                                checkedIngredientIds.insert(ing.id)
+                            }
+                        } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                Image(systemName: checkedIngredientIds.contains(ing.id) ? "checkmark.square" : "square")
+                                    .foregroundStyle(.secondary)
+                                Text(text)
+                                    .foregroundStyle(.primary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 Button("Lägg till i inköpslista") {
                     Task { await addToShoppingList() }
@@ -156,16 +179,59 @@ struct RecipeDetailView: View {
         if !parsedSteps.isEmpty {
             Section("Gör så här") {
                 ForEach(Array(parsedSteps.enumerated()), id: \.offset) { idx, step in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("\(idx + 1).")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(step)
+                    let key = "\(idx)|\(step)"
+                    if isHeadingStep(step) {
+                        Text(step.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: ":")) + ":")
+                            .font(.headline)
+                            .padding(.vertical, 4)
+                    } else {
+                        Button {
+                            if checkedStepKeys.contains(key) {
+                                checkedStepKeys.remove(key)
+                            } else {
+                                checkedStepKeys.insert(key)
+                            }
+                        } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: checkedStepKeys.contains(key) ? "checkmark.square" : "square")
+                                    .foregroundStyle(.secondary)
+                                    .padding(.top, 2)
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("\(idx + 1).")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text(step)
+                                        .foregroundStyle(.primary)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .padding(.vertical, 4)
                 }
             }
         }
+    }
+
+    private func isHeadingLine(ing: IngredientDTO, text: String) -> Bool {
+        // If it ends with ":" we always treat it as a heading.
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(":") { return true }
+        // If it's an unstructured line (no amount/unit) and has no digits, treat as a section heading.
+        let hasAmountOrUnit = !((ing.amount ?? "").isEmpty && (ing.unit ?? "").isEmpty)
+        if hasAmountOrUnit { return false }
+        if text.rangeOfCharacter(from: .decimalDigits) != nil { return false }
+        // Avoid treating very short pantry items as headings
+        if text.count <= 3 { return false }
+        return true
+    }
+
+    private func isHeadingStep(_ step: String) -> Bool {
+        let s = step.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasSuffix(":") { return true }
+        // Allow simple headings like "Dressing" / "Sallad" in steps too
+        if s.rangeOfCharacter(from: .decimalDigits) == nil, s.count <= 30, !s.contains(".") {
+            return true
+        }
+        return false
     }
 
     @ViewBuilder
