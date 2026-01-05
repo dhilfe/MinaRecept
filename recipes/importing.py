@@ -869,12 +869,15 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
         # Prefer the actual recipe title from "Recept på X" if present inside the recipe section.
         # (Article title can be "Så enkelt är det att göra ...", which is not the recipe name.)
         if scope is not None:
-            text_scope = clean_text(scope.get_text("\n", strip=True))
-            m = re.search(r"\bRecept\s+p[åa]\s+([^\n]+)", text_scope, re.IGNORECASE)
-            if m:
-                possible = clean_title(m.group(1))
-                if possible:
-                    title = possible
+            # Avoid regex over the whole scope text (which may collapse newlines) – find the actual heading node.
+            for h in scope.find_all(["h1", "h2", "h3", "h4"]):
+                t = clean_text(h.get_text(" ", strip=True))
+                m = re.search(r"\bRecept\s+p[åa]\s+(.+)$", t, re.IGNORECASE)
+                if m:
+                    possible = clean_title(m.group(1))
+                    if possible:
+                        title = possible
+                        break
 
         def looks_like_nav(lines: list[str]) -> bool:
             if not lines:
@@ -904,10 +907,68 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
             best = candidates[0]
             return best
 
+        def extract_quantity_lines(root) -> list[str]:
+            """
+            Landleys sometimes uses checkbox-style markup, not <li>. Extract ingredient-like lines by pattern.
+            """
+            unit_words = [
+                "kg", "g", "mg",
+                "l", "dl", "cl", "ml",
+                "msk", "tsk", "krm",
+                "st", "styck", "stycken",
+                "port", "portion", "portioner",
+            ]
+            unit_re = re.compile(rf"\b(?:{'|'.join(map(re.escape, unit_words))})\b", re.IGNORECASE)
+
+            bad_snippets = [
+                "receptgeneratorn",
+                "hitta recept efter ingrediens",
+                "mina sparade recept",
+                "om landleys",
+            ]
+
+            out: list[str] = []
+            for el in root.find_all(["label", "li", "p", "span", "div"]):
+                t = clean_text(el.get_text(" ", strip=True))
+                if not t:
+                    continue
+                tl = t.lower()
+                if any(b in tl for b in bad_snippets):
+                    continue
+                # Must contain a digit and ideally a unit word.
+                if not re.search(r"\d", t):
+                    continue
+                if not unit_re.search(t):
+                    # Still allow some common patterns like "33 cl" (unit handled) or "0,5 tsk" etc.
+                    # If no unit, likely not an ingredient.
+                    continue
+                # Skip obvious temperatures/times
+                if "°" in t or "grader" in tl or "min" in tl or "tim" in tl:
+                    continue
+                if len(t) > 140:
+                    continue
+                out.append(t)
+
+            # Deduplicate while preserving order
+            seen = set()
+            deduped: list[str] = []
+            for x in out:
+                if x in seen:
+                    continue
+                seen.add(x)
+                deduped.append(x)
+            return deduped
+
         # If ingredients are missing or clearly came from nav/menu, try to extract from recipe section.
-        if not ingredients or looks_like_nav(ingredients):
+        if looks_like_nav(ingredients):
+            ingredients = []
+
+        if not ingredients:
             try:
-                extracted = choose_best_ingredient_list(scope if scope is not None else soup)
+                root = scope if scope is not None else soup
+                extracted = choose_best_ingredient_list(root)
+                if not extracted:
+                    extracted = extract_quantity_lines(root)
                 if extracted:
                     ingredients = extracted
             except Exception:
