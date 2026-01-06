@@ -177,3 +177,40 @@ class ImportImageAPITests(TestCase):
         self.assertIn("1. Blanda.", data["steps"])
 
 
+    @patch("recipes.ocr_service.ImageRecipeParser")
+    def test_import_image_parses_instagram_dressing_sallad_format(self, mock_parser_cls):
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {"title": "", "description": "", "ingredients": "", "steps": "", "cooking_time": 0, "servings": 4}
+
+        caption = (
+            "RECEPT på en helt underbar asiatisk biffsallad!\n"
+            "Dressing:\n"
+            "4 msk japansk soja\n"
+            "2 msk sesamolja\n"
+            "Sallad:\n"
+            "600 gr flankstek\n"
+            "1 litet romansalladshuvud\n"
+            "\n"
+            "1. Blanda ihop allt till dressingen.\n"
+            "2. Lägg upp allt på ett fat.\n"
+            "#sallad #recept\n"
+        )
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "source_url": "https://www.instagram.com/reel/XYZ/", "source_text": caption},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertIn("Dressing:", data["ingredients"])
+        self.assertIn("4 msk japansk soja", data["ingredients"])
+        self.assertIn("Sallad:", data["ingredients"])
+        self.assertIn("600 gr flankstek", data["ingredients"])
+        self.assertIn("1. Blanda ihop", data["steps"])
+
+

@@ -299,7 +299,69 @@ class ShareViewController: SLComposeServiceViewController {
             t = t.replacingOccurrences(of: "&#39;", with: "'")
             t = t.replacingOccurrences(of: "&lt;", with: "<")
             t = t.replacingOccurrences(of: "&gt;", with: ">")
-            return t
+
+            // Decode numeric HTML entities like &#229; or &#xE5; (incl. emojis like &#x1F31F;).
+            // We keep it small and robust.
+            func decodeNumericEntities(_ input: String) -> String {
+                var out = input
+
+                // Hex: &#x1F31F;
+                if let reHex = try? NSRegularExpression(pattern: "&#x([0-9A-Fa-f]+);", options: []) {
+                    let matches = reHex.matches(in: out, options: [], range: NSRange(out.startIndex..., in: out))
+                    for m in matches.reversed() {
+                        guard m.numberOfRanges == 2,
+                              let r = Range(m.range(at: 0), in: out),
+                              let rHex = Range(m.range(at: 1), in: out)
+                        else { continue }
+                        let hex = String(out[rHex])
+                        if let value = UInt32(hex, radix: 16), let scalar = UnicodeScalar(value) {
+                            out.replaceSubrange(r, with: String(Character(scalar)))
+                        }
+                    }
+                }
+
+                // Decimal: &#229;
+                if let reDec = try? NSRegularExpression(pattern: "&#([0-9]+);", options: []) {
+                    let matches = reDec.matches(in: out, options: [], range: NSRange(out.startIndex..., in: out))
+                    for m in matches.reversed() {
+                        guard m.numberOfRanges == 2,
+                              let r = Range(m.range(at: 0), in: out),
+                              let rDec = Range(m.range(at: 1), in: out)
+                        else { continue }
+                        let dec = String(out[rDec])
+                        if let value = UInt32(dec, radix: 10), let scalar = UnicodeScalar(value) {
+                            out.replaceSubrange(r, with: String(Character(scalar)))
+                        }
+                    }
+                }
+
+                return out
+            }
+
+            return decodeNumericEntities(t)
+        }
+
+        func sanitizeInstagramCaption(_ raw: String) -> String {
+            var t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Instagram og:description often looks like:
+            // "username Month DD, YYYY: \"...caption...\"." (with entities)
+            // Strip the username+date prefix if present.
+            if let re = try? NSRegularExpression(pattern: "^\\S+\\s+[A-Za-z]+\\s+\\d{1,2},\\s+\\d{4}:\\s+\"", options: []) {
+                let r = NSRange(t.startIndex..., in: t)
+                if let m = re.firstMatch(in: t, options: [], range: r),
+                   let prefixRange = Range(m.range(at: 0), in: t)
+                {
+                    t.removeSubrange(prefixRange)
+                }
+            }
+
+            // Strip surrounding quotes and a trailing period.
+            if t.hasPrefix("\"") { t.removeFirst() }
+            if t.hasSuffix("\".") { t = String(t.dropLast(2)) }
+            if t.hasSuffix("\"") { t.removeLast() }
+
+            return t.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
         let ogDescRaw = extractMeta("og:description")
@@ -308,7 +370,7 @@ class ShareViewController: SLComposeServiceViewController {
 
         var caption: String? = nil
         if let ogDescRaw {
-            let t = htmlUnescape(ogDescRaw).trimmingCharacters(in: .whitespacesAndNewlines)
+            let t = sanitizeInstagramCaption(htmlUnescape(ogDescRaw))
             // Instagram often prefixes with "X likes, Y comments - ...". Keep only the trailing part.
             if let dash = t.range(of: " - ") {
                 caption = String(t[dash.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -317,7 +379,7 @@ class ShareViewController: SLComposeServiceViewController {
             }
         }
         if (caption == nil || caption?.isEmpty == true), let descRaw {
-            let t = htmlUnescape(descRaw).trimmingCharacters(in: .whitespacesAndNewlines)
+            let t = sanitizeInstagramCaption(htmlUnescape(descRaw))
             caption = t
         }
 

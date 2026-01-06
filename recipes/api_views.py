@@ -301,8 +301,10 @@ class RecipeViewSet(OwnedModelViewSet):
             Returns (ingredients, steps, description_extra).
             """
             import re
+            import html
 
-            raw = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+            # Instagram captions may contain HTML entities (e.g. "p&#xe5;", "&#x1f31f;").
+            raw = html.unescape((text or "")).replace("\r\n", "\n").replace("\r", "\n")
             # Remove obvious URLs
             raw = re.sub(r"https?://\\S+", "", raw)
             lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
@@ -327,6 +329,7 @@ class RecipeViewSet(OwnedModelViewSet):
             # Identify sections
             ing_start = None
             step_start = None
+            numbered_step_idx = None
             for i, ln in enumerate(lines):
                 low = ln.lower().rstrip(":").strip()
                 if ing_start is None and ("ingredien" in low or low == "ingredients"):
@@ -335,6 +338,12 @@ class RecipeViewSet(OwnedModelViewSet):
                 if step_start is None and ("gör" in low or "gor" in low or "instruktion" in low or low == "instructions" or "tillag" in low):
                     step_start = i + 1
                     continue
+                if numbered_step_idx is None and re.match(r"^\s*\d+\s*[.)-]\s*\S+", ln):
+                    numbered_step_idx = i
+
+            # If no explicit step marker exists but we do have numbered steps, use those.
+            if step_start is None and numbered_step_idx is not None:
+                step_start = numbered_step_idx
 
             def collect_until_next_heading(start_idx: int | None) -> list[str]:
                 if start_idx is None:
@@ -351,6 +360,47 @@ class RecipeViewSet(OwnedModelViewSet):
 
             ing_lines = collect_until_next_heading(ing_start)
             step_lines = collect_until_next_heading(step_start)
+
+            # Common Reel caption format:
+            # Intro text -> "Dressing:" block -> "Sallad:" block -> numbered steps.
+            # If we have numbered steps but no explicit ingredients marker, treat the content
+            # before the first numbered step as ingredients (preserving subsection headings ending with ":").
+            if not ing_lines and numbered_step_idx is not None and ing_start is None:
+                # Find first subsection heading before steps.
+                ing_block_start = None
+                for i, ln in enumerate(lines[:numbered_step_idx]):
+                    if ln.strip().endswith(":"):
+                        ing_block_start = i
+                        break
+                if ing_block_start is None:
+                    ing_block_start = 1 if numbered_step_idx > 1 else 0
+
+                desc_extra = ""
+                if ing_block_start > 1:
+                    desc_extra = "\n".join(lines[1:ing_block_start]).strip()
+
+                ing_out: list[str] = []
+                for ln in lines[ing_block_start:numbered_step_idx]:
+                    if ln.strip().endswith(":"):
+                        h = normalize_heading(ln)
+                        if h:
+                            ing_out.append(h + ":")
+                        continue
+                    s = re.sub(r"^[-•*]+\s*", "", ln).strip()
+                    if s:
+                        ing_out.append(s)
+
+                # Prefer whatever we already collected for steps (it starts at the numbered lines).
+                step_out = [s for s in step_lines if s and not s.strip().startswith("#")]
+                if not step_out:
+                    for ln in lines[numbered_step_idx:]:
+                        s = ln.strip()
+                        if not s or s.startswith("#"):
+                            continue
+                        step_out.append(s)
+
+                if ing_out or step_out or desc_extra:
+                    return "\n".join(ing_out).strip(), "\n".join(step_out).strip(), desc_extra
 
             # If no explicit section markers, keep caption as description only.
             if not ing_lines and not step_lines:
