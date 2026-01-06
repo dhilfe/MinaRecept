@@ -100,7 +100,7 @@ class ShareViewController: SLComposeServiceViewController {
             extensionItemText,
         ].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
-        let preflightText = preflightTextCandidates.joined(separator: "\n\n")
+        var preflightText = preflightTextCandidates.joined(separator: "\n\n")
         var preflightURL = preflightTextCandidates.compactMap { self.extractURL(from: $0) }.first
 
         // Instagram sometimes shares only an image (no URL/text). Some apps still make this work
@@ -111,6 +111,27 @@ class ShareViewController: SLComposeServiceViewController {
                 preflightURL = u
             } else if let s = pb.string, let u = self.extractURL(from: s) {
                 preflightURL = u
+            }
+        }
+
+        // Instagram often shares only the URL without caption text.
+        // If the user copied the caption right before sharing, pick it up from pasteboard
+        // (only when share text is empty and only if it looks like a recipe caption).
+        if preflightText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let url = preflightURL,
+           let host = url.host?.lowercased(),
+           host.contains("instagram.com")
+        {
+            let pb = UIPasteboard.general
+            if let s = pb.string {
+                let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty,
+                   self.extractURL(from: trimmed) == nil,
+                   Self.looksLikeInstagramCaption(trimmed)
+                {
+                    preflightText = trimmed
+                    shareLogger.info("Using pasteboard caption text for Instagram (len=\(preflightText.count))")
+                }
             }
         }
 
@@ -1047,6 +1068,23 @@ class ShareViewController: SLComposeServiceViewController {
         }
         
         return t.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func looksLikeInstagramCaption(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.count < 40 { return false }
+
+        let lower = t.lowercased()
+        let hasSwedishMarkers = lower.contains("ingredien") || lower.contains("gör så här") || lower.contains("gör såhär")
+        let hasEnglishMarkers = lower.contains("ingredients") || lower.contains("instructions") || lower.contains("method")
+        if hasSwedishMarkers || hasEnglishMarkers { return true }
+
+        // Fallback: multi-line + list-like formatting.
+        let lineCount = t.split(separator: "\n").count
+        if lineCount >= 5 && (t.contains("- ") || t.contains("•") || t.contains("1.")) {
+            return true
+        }
+        return false
     }
 
     private func loadSharedURLIfAvailable() {
