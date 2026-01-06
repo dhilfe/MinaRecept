@@ -820,6 +820,28 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
 
         logger = logging.getLogger(__name__)
 
+        def _instagram_request_config() -> tuple[dict | None, str]:
+            """Return (proxies, user_agent) for Instagram requests.
+
+            Optional env vars:
+            - INSTAGRAM_PROXY_URL: e.g. http://user:pass@host:port (used for both http/https)
+            - INSTAGRAM_USER_AGENT: overrides the default desktop UA
+            """
+            proxy_url = (os.environ.get('INSTAGRAM_PROXY_URL') or '').strip()
+            proxies = None
+            if proxy_url:
+                proxies = {
+                    'http': proxy_url,
+                    'https': proxy_url,
+                }
+
+            default_ua = (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+            )
+            ua = (os.environ.get('INSTAGRAM_USER_AGENT') or '').strip() or default_ua
+            return proxies, ua
+
         def _get_instagram_auth_cookies() -> tuple[dict[str, str], bool]:
             """Return (cookies, has_raw_cookie_string).
 
@@ -879,6 +901,7 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                 logger = logging.getLogger(__name__)
 
                 encoded = quote(target_url, safe='')
+                proxies, ua = _instagram_request_config()
 
                 # In practice, https://www.instagram.com/oembed/ tends to be more reliable than api.instagram.com
                 # for unauthenticated requests.
@@ -898,12 +921,10 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                         resp = requests.get(
                             oembed_url,
                             headers={
-                                "User-Agent": (
-                                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                                    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-                                ),
+                                "User-Agent": ua,
                                 "Accept": "application/json",
                             },
+                            proxies=proxies,
                             timeout=10,
                         )
                         last_url = oembed_url
@@ -980,11 +1001,9 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                     f"https://www.instagram.com/{kind}/{shortcode}/embed/captioned/",
                 ]
 
+                proxies, ua = _instagram_request_config()
                 headers = {
-                    "User-Agent": (
-                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-                    ),
+                    "User-Agent": ua,
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                     "Accept-Language": "sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7",
                 }
@@ -998,7 +1017,7 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                 )
 
                 for embed_url in embed_candidates:
-                    resp = requests.get(embed_url, headers=headers, timeout=10)
+                    resp = requests.get(embed_url, headers=headers, proxies=proxies, timeout=10)
                     status = getattr(resp, 'status_code', 0)
                     ct = (getattr(resp, 'headers', {}) or {}).get('Content-Type')
 
@@ -1041,6 +1060,7 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                                 embed_url,
                                 headers=auth_headers,
                                 cookies=cookies,
+                                proxies=proxies,
                                 timeout=10,
                             )
                             a_status = getattr(auth_resp, 'status_code', 0)
@@ -1275,6 +1295,7 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                 if kind not in {'reel', 'p', 'tv'}:
                     return None
 
+                proxies, ua = _instagram_request_config()
                 json_candidates = [
                     f"https://www.instagram.com/{kind}/{shortcode}/?__a=1&__d=dis",
                     f"https://www.instagram.com/{kind}/{shortcode}/?__a=1",
@@ -1283,10 +1304,7 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                 ]
 
                 headers = {
-                    "User-Agent": (
-                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-                    ),
+                    "User-Agent": ua,
                     "Accept": "application/json, text/plain, */*",
                     "X-Requested-With": "XMLHttpRequest",
                     # Some deployments require these to avoid HTML/404 even with sessionid.
@@ -1320,6 +1338,7 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                         json_url,
                         headers=headers,
                         cookies=cookies,
+                        proxies=proxies,
                         timeout=10,
                     )
 
@@ -1398,6 +1417,8 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                     return None
                 shortcode = m.group(1)
 
+                proxies, _ua = _instagram_request_config()
+
                 L = instaloader.Instaloader(quiet=True)
                 try:
                     L.context.max_connection_attempts = 1
@@ -1407,6 +1428,13 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                     L.context.request_timeout = 10
                 except Exception:
                     pass
+
+                # Apply proxy to Instaloader session if configured.
+                if proxies:
+                    try:
+                        L.context._session.proxies.update(proxies)
+                    except Exception:
+                        pass
 
                 cookies: dict[str, str] = {}
                 if raw_cookies:
