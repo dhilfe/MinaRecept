@@ -7,7 +7,8 @@ from openai import OpenAI
 
 class ImageRecipeParser:
     def __init__(self):
-        self.api_key = os.environ.get('OPENAI_API_KEY')
+        # Support both env var names (some deployments use OPEN_API_KEY).
+        self.api_key = os.environ.get('OPENAI_API_KEY') or os.environ.get('OPEN_API_KEY')
         self.client = None
         if self.api_key:
             self.client = OpenAI(api_key=self.api_key)

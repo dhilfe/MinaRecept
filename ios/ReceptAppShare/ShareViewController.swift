@@ -3,6 +3,11 @@ import Social
 import UniformTypeIdentifiers
 import os
 
+private struct InstagramPreview {
+    let captionText: String?
+    let thumbnailURL: URL?
+}
+
 private let shareLogger = Logger(subsystem: "se.enklagrejer.minarecept.share", category: "Share")
 
 private enum AppGroupConfig {
@@ -15,6 +20,341 @@ class ShareViewController: SLComposeServiceViewController {
     private var selectedDishType: (id: String, name: String) = ("lunch_dinner", "Lunch/Middag")
     private var didAutoGuessDishType = false
     private var sharedURL: URL?
+
+    private func debugDumpIncomingAttachments(context: String) {
+#if !DEBUG
+        return
+#else
+        guard let extensionItems = extensionContext?.inputItems as? [NSExtensionItem] else {
+            self.debugNotice("[DEBUG] attachments(\(context)) none: inputItems not NSExtensionItem")
+            return
+        }
+
+        var totalProviders = 0
+        for item in extensionItems {
+            guard let attachments = item.attachments else { continue }
+            for provider in attachments {
+                totalProviders += 1
+                let utis = provider.registeredTypeIdentifiers.joined(separator: ", ")
+                self.debugNotice("[DEBUG] attachments(\(context)) UTIs: \(utis)")
+
+                // Quick signal flags (cheap checks only).
+                let hasURL = provider.hasItemConformingToTypeIdentifier(UTType.url.identifier)
+                    || provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+                    || provider.canLoadObject(ofClass: URL.self)
+                let hasImage = provider.canLoadObject(ofClass: UIImage.self)
+                    || provider.registeredTypeIdentifiers.contains(where: { UTType($0)?.conforms(to: .image) == true })
+                let hasMovie = provider.registeredTypeIdentifiers.contains(where: { UTType($0)?.conforms(to: .movie) == true })
+                    || provider.registeredTypeIdentifiers.contains(where: { UTType($0)?.conforms(to: .video) == true })
+                if hasURL || hasImage || hasMovie {
+                    self.debugNotice("[DEBUG] attachments(\(context)) flags: url=\(hasURL) image=\(hasImage) movie=\(hasMovie)")
+                }
+            }
+        }
+
+        self.debugNotice("[DEBUG] attachments(\(context)) providers=\(totalProviders)")
+#endif
+    }
+
+    private func debugNotice(_ message: String) {
+#if DEBUG
+        // Console.app on macOS sometimes hides unified logs from extensions depending on
+        // device settings/filtering. NSLog is a reliable fallback when debugging.
+        shareLogger.notice("\(message, privacy: .public)")
+        NSLog("%{public}@", message)
+#endif
+    }
+
+    private func debugDumpPasteboard(context: String) {
+#if !DEBUG
+        return
+#else
+        let pb = UIPasteboard.general
+        self.debugNotice(
+            "[DEBUG] pasteboard(\(context)) hasStrings=\(pb.hasStrings) hasURLs=\(pb.hasURLs) hasImages=\(pb.hasImages) numberOfItems=\(pb.numberOfItems)"
+        )
+
+        if let s = pb.string {
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            let oneLine = trimmed.replacingOccurrences(of: "\n", with: " ")
+            let snippet = oneLine.count > 180 ? String(oneLine.prefix(180)) + "…" : oneLine
+            self.debugNotice("[DEBUG] pasteboard(\(context)) pb.string len=\(trimmed.count) snippet=\(snippet)")
+        }
+
+        // Log the advertised UTIs in the pasteboard items (best-effort, limit output).
+        if let first = pb.items.first {
+            let keys = first.keys.sorted().prefix(12).joined(separator: ", ")
+            self.debugNotice("[DEBUG] pasteboard(\(context)) firstItemTypes: \(keys)")
+        }
+
+        // iOS can also surface pasteboard content via item providers.
+        if #available(iOS 11.0, *) {
+            let providers = pb.itemProviders
+            self.debugNotice("[DEBUG] pasteboard(\(context)) itemProviders=\(providers.count)")
+            if let p0 = providers.first {
+                let utis = p0.registeredTypeIdentifiers.prefix(16).joined(separator: ", ")
+                self.debugNotice("[DEBUG] pasteboard(\(context)) provider0 UTIs: \(utis)")
+            }
+        }
+#endif
+    }
+
+    private func pasteboardTextCandidate() -> String? {
+        let pb = UIPasteboard.general
+
+        if let s = pb.string {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { return t }
+        }
+
+        // Prefer explicit plain-text representations if present.
+        if let first = pb.items.first {
+            let preferredKeys = [
+                UTType.utf8PlainText.identifier,
+                UTType.plainText.identifier,
+                UTType.text.identifier,
+            ]
+            for k in preferredKeys {
+                if let v = first[k] {
+                    if let s = v as? String {
+                        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !t.isEmpty { return t }
+                    }
+                    if let data = v as? Data {
+                        if let s = String(data: data, encoding: .utf8) {
+                            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !t.isEmpty { return t }
+                        }
+                        if let s = String(data: data, encoding: .utf16) {
+                            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !t.isEmpty { return t }
+                        }
+                    }
+                }
+            }
+
+            // If we have HTML, convert to plain text via NSAttributedString.
+            if let v = first[UTType.html.identifier] {
+                let html: String?
+                if let s = v as? String { html = s }
+                else if let data = v as? Data { html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16) }
+                else { html = nil }
+
+                if let html, !html.isEmpty {
+                    if let data = html.data(using: .utf8),
+                       let att = try? NSAttributedString(
+                        data: data,
+                        options: [
+                            .documentType: NSAttributedString.DocumentType.html,
+                            .characterEncoding: String.Encoding.utf8.rawValue,
+                        ],
+                        documentAttributes: nil
+                       )
+                    {
+                        let t = att.string.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !t.isEmpty { return t }
+                    }
+                }
+            }
+
+            // Last resort: any string-like value.
+            for (_, v) in first {
+                if let s = v as? String {
+                    let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !t.isEmpty { return t }
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func fetchInstagramPreview(from url: URL, completion: @escaping (InstagramPreview?) -> Void) {
+        // Best-effort: fetch HTML and parse OpenGraph/meta tags. This runs on-device (user IP),
+        // which can behave differently than server-side scraping.
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 12
+        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        request.setValue("sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7", forHTTPHeaderField: "Accept-Language")
+        // iOS Safari-ish UA to reduce bot-style responses.
+        request.setValue(
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            forHTTPHeaderField: "User-Agent"
+        )
+
+        let config = URLSessionConfiguration.ephemeral
+        config.waitsForConnectivity = false
+        let session = URLSession(configuration: config)
+
+        session.dataTask(with: request) { [weak self] data, response, error in
+            guard let self else { return }
+            if let error {
+                self.debugNotice("[DEBUG] IG preview fetch failed: \(String(describing: error))")
+                completion(nil)
+                return
+            }
+
+            guard let http = response as? HTTPURLResponse else {
+                self.debugNotice("[DEBUG] IG preview fetch: no HTTPURLResponse")
+                completion(nil)
+                return
+            }
+
+            let status = http.statusCode
+            self.debugNotice("[DEBUG] IG preview fetch HTTP \(status)")
+            guard (200...299).contains(status), let data else {
+                completion(nil)
+                return
+            }
+
+            // Decode best-effort.
+            let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+            guard let html else {
+                self.debugNotice("[DEBUG] IG preview fetch: could not decode HTML")
+                completion(nil)
+                return
+            }
+
+            let preview = self.parseInstagramPreviewHTML(html, baseURL: url)
+            if preview?.captionText != nil || preview?.thumbnailURL != nil {
+                let capLen = preview?.captionText?.count ?? 0
+                self.debugNotice("[DEBUG] IG preview parsed capLen=\(capLen) thumb=\(preview?.thumbnailURL?.absoluteString ?? "(none)")")
+            } else {
+                self.debugNotice("[DEBUG] IG preview parsed nothing")
+            }
+            completion(preview)
+        }.resume()
+    }
+
+    private func fetchImage(from url: URL, completion: @escaping (UIImage?) -> Void) {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 12
+        request.setValue("image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        request.setValue(
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            forHTTPHeaderField: "User-Agent"
+        )
+
+        let config = URLSessionConfiguration.ephemeral
+        config.waitsForConnectivity = false
+        let session = URLSession(configuration: config)
+
+        session.dataTask(with: request) { [weak self] data, response, error in
+            guard let self else { return }
+            if let error {
+                self.debugNotice("[DEBUG] fetchImage failed: \(String(describing: error))")
+                completion(nil)
+                return
+            }
+            guard let http = response as? HTTPURLResponse else {
+                self.debugNotice("[DEBUG] fetchImage: no HTTPURLResponse")
+                completion(nil)
+                return
+            }
+            self.debugNotice("[DEBUG] fetchImage HTTP \(http.statusCode) bytes=\(data?.count ?? 0)")
+            guard (200...299).contains(http.statusCode), let data else {
+                completion(nil)
+                return
+            }
+            if let image = UIImage(data: data) {
+                completion(image)
+            } else {
+                self.debugNotice("[DEBUG] fetchImage: UIImage decode failed")
+                completion(nil)
+            }
+        }.resume()
+    }
+
+    private func parseInstagramPreviewHTML(_ html: String, baseURL: URL) -> InstagramPreview? {
+        // Very small, robust-ish meta tag extraction.
+        func extractMeta(_ key: String) -> String? {
+            // Matches: <meta property="og:description" content="..."> or name="description"
+            // We keep it simple and case-insensitive.
+            let patterns = [
+                "<meta[^>]+property=\"\(key)\"[^>]+content=\"([^\"]*)\"",
+                "<meta[^>]+name=\"\(key)\"[^>]+content=\"([^\"]*)\"",
+                "<meta[^>]+content=\"([^\"]*)\"[^>]+property=\"\(key)\"",
+                "<meta[^>]+content=\"([^\"]*)\"[^>]+name=\"\(key)\"",
+            ]
+            for p in patterns {
+                if let r = html.range(of: p, options: [.regularExpression, .caseInsensitive]) {
+                    let snippet = String(html[r])
+                    if let m = snippet.range(of: "content=\"", options: [.caseInsensitive]) {
+                        let rest = snippet[m.upperBound...]
+                        if let end = rest.firstIndex(of: "\"") {
+                            return String(rest[..<end])
+                        }
+                    }
+                }
+            }
+            return nil
+        }
+
+        func htmlUnescape(_ s: String) -> String {
+            var t = s
+            t = t.replacingOccurrences(of: "&amp;", with: "&")
+            t = t.replacingOccurrences(of: "&quot;", with: "\"")
+            t = t.replacingOccurrences(of: "&#39;", with: "'")
+            t = t.replacingOccurrences(of: "&lt;", with: "<")
+            t = t.replacingOccurrences(of: "&gt;", with: ">")
+            return t
+        }
+
+        let ogDescRaw = extractMeta("og:description")
+        let descRaw = extractMeta("description")
+        let ogImageRaw = extractMeta("og:image")
+
+        var caption: String? = nil
+        if let ogDescRaw {
+            let t = htmlUnescape(ogDescRaw).trimmingCharacters(in: .whitespacesAndNewlines)
+            // Instagram often prefixes with "X likes, Y comments - ...". Keep only the trailing part.
+            if let dash = t.range(of: " - ") {
+                caption = String(t[dash.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                caption = t
+            }
+        }
+        if (caption == nil || caption?.isEmpty == true), let descRaw {
+            let t = htmlUnescape(descRaw).trimmingCharacters(in: .whitespacesAndNewlines)
+            caption = t
+        }
+
+        // Avoid worthless captions.
+        if let c = caption, c.count < 20 {
+            caption = nil
+        }
+
+        var thumbURL: URL? = nil
+        if let ogImageRaw {
+            let t = htmlUnescape(ogImageRaw).trimmingCharacters(in: .whitespacesAndNewlines)
+            thumbURL = URL(string: t) ?? URL(string: t, relativeTo: baseURL)
+        }
+
+        if caption == nil && thumbURL == nil { return nil }
+        return InstagramPreview(captionText: caption, thumbnailURL: thumbURL)
+    }
+
+    private func textWithoutURLs(_ text: String) -> String {
+        // Remove URL substrings so we can tell whether the user actually provided caption text.
+        // Instagram commonly shares only a URL, which otherwise prevents pasteboard-caption fallback.
+        var t = text
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            let range = NSRange(location: 0, length: t.utf16.count)
+            let matches = detector.matches(in: t, options: [], range: range)
+            for match in matches.reversed() {
+                if let r = Range(match.range, in: t) {
+                    t.removeSubrange(r)
+                }
+            }
+        }
+        // Normalize whitespace/newlines after removals.
+        t = t
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\n\n\n+", with: "\n\n", options: .regularExpression)
+        return t.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     private static let dishTypes: [(id: String, name: String)] = [
         ("breakfast", "Frukost"),
@@ -50,11 +390,15 @@ class ShareViewController: SLComposeServiceViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        self.debugNotice("[DEBUG] ShareViewController.viewDidLoad")
+        self.debugDumpIncomingAttachments(context: "viewDidLoad")
         self.loadSharedURLIfAvailable()
     }
 
     override func didSelectPost() {
         // This is called after the user selects Post. Do the upload of contentText and/or NSExtensionContext attachments.
+
+        self.debugNotice("[DEBUG] ShareViewController.didSelectPost")
         
         guard let extensionItems = extensionContext?.inputItems as? [NSExtensionItem] else {
             self.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
@@ -84,7 +428,7 @@ class ShareViewController: SLComposeServiceViewController {
             for provider in attachments {
                 // Debug: learn what other apps share (ICA/kokaihop, etc.).
                 let utis = provider.registeredTypeIdentifiers.joined(separator: ", ")
-                shareLogger.info("[DEBUG] attachment UTIs: \(utis, privacy: .public)")
+                self.debugNotice("[DEBUG] attachment UTIs: \(utis)")
                 candidates.append(.init(provider: provider, extensionItem: item))
             }
         }
@@ -103,6 +447,11 @@ class ShareViewController: SLComposeServiceViewController {
         var preflightText = preflightTextCandidates.joined(separator: "\n\n")
         var preflightURL = preflightTextCandidates.compactMap { self.extractURL(from: $0) }.first
 
+        let isInstagramShare: Bool = {
+            guard let url = preflightURL, let host = url.host?.lowercased() else { return false }
+            return host.contains("instagram.com")
+        }()
+
         // Instagram sometimes shares only an image (no URL/text). Some apps still make this work
         // by reading a recently-copied link from pasteboard. Only touch pasteboard if needed.
         if preflightURL == nil {
@@ -114,28 +463,49 @@ class ShareViewController: SLComposeServiceViewController {
             }
         }
 
+        // Debug assist: if we didn't find a URL in preflight text/pasteboard but we do have providers,
+        // dump pasteboard info anyway. Some apps provide the actual URL only through item providers.
+        if preflightURL == nil, !candidates.isEmpty {
+            self.debugDumpPasteboard(context: "didSelectPost-preflightURL-none")
+        }
+
+        // If this is an Instagram share, dump pasteboard metadata for debugging. Some apps rely on
+        // Instagram placing an image/video on the pasteboard even when attachments are URL-only.
+        if isInstagramShare {
+            self.debugDumpPasteboard(context: "didSelectPost")
+        }
+
         // Instagram often shares only the URL without caption text.
-        // If the user copied the caption right before sharing, pick it up from pasteboard
-        // (only when share text is empty and only if it looks like a recipe caption).
-        if preflightText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let url = preflightURL,
-           let host = url.host?.lowercased(),
-           host.contains("instagram.com")
+        // If the user copied the caption right before sharing, pick it up from pasteboard.
+        // IMPORTANT: treat "text that is just a URL" as empty caption, otherwise this fallback never triggers.
+          if let url = preflightURL,
+              let host = url.host?.lowercased(),
+              host.contains("instagram.com")
         {
-            let pb = UIPasteboard.general
-            if let s = pb.string {
-                let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty,
-                   self.extractURL(from: trimmed) == nil,
-                   Self.looksLikeInstagramCaption(trimmed)
-                {
-                    preflightText = trimmed
-                    shareLogger.info("Using pasteboard caption text for Instagram (len=\(preflightText.count))")
+            let captionCandidate = self.textWithoutURLs(preflightText)
+            if captionCandidate.isEmpty {
+                let pb = UIPasteboard.general
+                if let s = pb.string {
+                    let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty,
+                       self.extractURL(from: trimmed) == nil,
+                       Self.looksLikeInstagramCaption(trimmed)
+                    {
+                        preflightText = trimmed
+                        self.debugNotice("[DEBUG] Using pasteboard caption text for Instagram (len=\(preflightText.count))")
+                    } else {
+                        self.debugNotice("[DEBUG] Pasteboard caption not used for Instagram (pbLen=\(trimmed.count))")
+                    }
+                } else {
+                    self.debugNotice("[DEBUG] Pasteboard has no string for Instagram")
                 }
             }
         }
 
-        shareLogger.info("[DEBUG] preflightTextLen=\(preflightText.count) preflightURL=\((preflightURL?.absoluteString ?? "(none)"), privacy: .public) candidates=\(candidates.count)")
+        // Same rationale: `.notice` is easier to capture from devices.
+        self.debugNotice(
+            "[DEBUG] preflightTextLen=\(preflightText.count) preflightURL=\(preflightURL?.absoluteString ?? "(none)") candidates=\(candidates.count)"
+        )
 
         let hasPotentialImage = candidates.contains { c in
             c.provider.canLoadObject(ofClass: UIImage.self) || c.provider.registeredTypeIdentifiers.contains(where: { UTType($0)?.conforms(to: .image) == true })
@@ -148,14 +518,31 @@ class ShareViewController: SLComposeServiceViewController {
             host.contains("instagram.com"),
             hasPotentialImage
         {
-            shareLogger.info("Instagram URL detected; will prefer image import if image is available.")
+            self.debugNotice("[DEBUG] Instagram URL detected; will prefer image import if image is available.")
             tryUploadImageFromCandidatesWithContext(0, sourceURL: url, sourceText: preflightText)
             return
         }
 
+        // Instagram sometimes shares only a URL attachment, but places an image on the pasteboard.
+        // If so, import that image (thumbnail) instead of attempting server-side scraping.
+        if
+            let url = preflightURL,
+            let host = url.host?.lowercased(),
+            host.contains("instagram.com"),
+            !hasPotentialImage
+        {
+            let pb = UIPasteboard.general
+            if pb.hasImages, let image = pb.image ?? pb.images?.first {
+                self.debugNotice("[DEBUG] Instagram URL detected; using pasteboard image for import.")
+                let inferredTitle = self.bestEffortTitleForImageImport(suggestedName: nil, item: nil)
+                finishOnce { self.uploadImage(image, title: inferredTitle, sourceURL: url, sourceText: preflightText) }
+                return
+            }
+        }
+
         // Default: if we already found a URL, use it.
         if let url = preflightURL {
-            shareLogger.info("Found URL in preflight text (len=\(preflightText.count)).")
+            self.debugNotice("[DEBUG] Found URL in preflight text (len=\(preflightText.count)).")
             finishOnce { self.uploadURL(url, sourceText: preflightText) }
             return
         }
@@ -352,10 +739,97 @@ class ShareViewController: SLComposeServiceViewController {
                         return
                     }
 
+                    let itemType = item.map { String(describing: type(of: $0)) } ?? "(nil)"
+                    self.debugNotice("[DEBUG] URL item loaded type=\(itemType) uti=\(typeId)")
+
                     if let url = self.extractURL(fromItem: item) ?? self.extractURL(from: self.contentText) {
-                        finishOnce { self.uploadURL(url, sourceText: preflightText) }
+                        self.debugNotice("[DEBUG] URL extracted: \(url.absoluteString)")
+
+                        // If URL is Instagram and share text is empty (often only URL is shared),
+                        // attempt to capture caption-like text from pasteboard, then from an on-device HTML fetch.
+                        var sourceTextToSend = preflightText
+                        if let host = url.host?.lowercased(), host.contains("instagram.com") {
+                            let captionCandidate = self.textWithoutURLs(sourceTextToSend)
+                            if captionCandidate.isEmpty {
+                                if let pbText = self.pasteboardTextCandidate() {
+                                    let pbTrimmed = pbText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    if !pbTrimmed.isEmpty,
+                                       self.extractURL(from: pbTrimmed) == nil,
+                                       Self.looksLikeInstagramCaption(pbTrimmed)
+                                    {
+                                        sourceTextToSend = pbTrimmed
+                                        self.debugNotice("[DEBUG] Using pasteboard text for Instagram source_text (len=\(pbTrimmed.count))")
+                                    } else {
+                                        let snippetOneLine = pbTrimmed.replacingOccurrences(of: "\n", with: " ")
+                                        let snippet = snippetOneLine.count > 160 ? String(snippetOneLine.prefix(160)) + "…" : snippetOneLine
+                                        self.debugNotice("[DEBUG] Pasteboard text not accepted as caption (len=\(pbTrimmed.count)) snippet=\(snippet)")
+                                    }
+                                } else {
+                                    self.debugNotice("[DEBUG] No pasteboard text candidate for Instagram")
+                                }
+
+                                // If still empty, try fetching on-device preview HTML (may contain og:description).
+                                let finalCandidate = self.textWithoutURLs(sourceTextToSend)
+                                if finalCandidate.isEmpty {
+                                    self.debugNotice("[DEBUG] IG source_text still empty; fetching IG preview HTML")
+                                    self.fetchInstagramPreview(from: url) { preview in
+                                        if didFinish { return }
+
+                                        let caption = (preview?.captionText?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+                                        let thumbnailURL = preview?.thumbnailURL
+
+                                        // Prefer creating via image import so we get a thumbnail saved on the recipe,
+                                        // while still allowing the backend to parse caption text into ingredients/steps.
+                                        if let thumbnailURL {
+                                            self.debugNotice("[DEBUG] IG preview has thumbnail; downloading and using image import")
+                                            self.fetchImage(from: thumbnailURL) { image in
+                                                if didFinish { return }
+                                                if let image {
+                                                    let inferredTitle = self.bestEffortTitleForImageImport(suggestedName: nil, item: nil)
+                                                    finishOnce { self.uploadImage(image, title: inferredTitle, sourceURL: url, sourceText: caption) }
+                                                } else {
+                                                    self.debugNotice("[DEBUG] IG thumbnail download failed; falling back to URL import")
+                                                    finishOnce { self.uploadURL(url, sourceText: caption ?? sourceTextToSend) }
+                                                }
+                                            }
+                                            return
+                                        }
+
+                                        // No thumbnail -> fall back to URL import with caption text.
+                                        finishOnce { self.uploadURL(url, sourceText: caption ?? sourceTextToSend) }
+                                    }
+                                    return
+                                }
+                            }
+                        }
+
+                        finishOnce { self.uploadURL(url, sourceText: sourceTextToSend) }
                     } else {
-                        tryUploadURLFromCandidates(idx + 1)
+                        let textSnippet = self.coerceText(from: item).map { s in
+                            let t = s.replacingOccurrences(of: "\n", with: " ")
+                            return t.count > 140 ? String(t.prefix(140)) + "…" : t
+                        } ?? "(no text)"
+                        self.debugNotice("[DEBUG] URL extraction failed for uti=\(typeId); textSnippet=\(textSnippet)")
+                        // Try URL object loading as an immediate fallback for this provider.
+                        if provider.canLoadObject(ofClass: URL.self) {
+                            _ = provider.loadObject(ofClass: URL.self) { [weak self] object, error in
+                                guard let self else { return }
+                                if didFinish { return }
+
+                                if error != nil {
+                                    tryUploadURLFromCandidates(idx + 1)
+                                    return
+                                }
+                                if let url = object {
+                                    self.debugNotice("[DEBUG] URL extracted via loadObject: \(url.absoluteString)")
+                                    finishOnce { self.uploadURL(url, sourceText: preflightText) }
+                                } else {
+                                    tryUploadURLFromCandidates(idx + 1)
+                                }
+                            }
+                        } else {
+                            tryUploadURLFromCandidates(idx + 1)
+                        }
                     }
                 }
                 return
@@ -564,6 +1038,14 @@ class ShareViewController: SLComposeServiceViewController {
     private func extractURL(fromItem item: NSSecureCoding?) -> URL? {
         if item == nil { return nil }
 
+        // NSItemProvider often returns bridged Foundation classes.
+        if let nsurl = item as? NSURL {
+            return nsurl as URL
+        }
+        if let nsstr = item as? NSString {
+            return extractURL(from: nsstr as String)
+        }
+
         if let url = item as? URL {
             // If it's a file URL, try to read contents and extract a web URL from it.
             if url.isFileURL, let data = try? Data(contentsOf: url), data.count < 400_000 {
@@ -629,6 +1111,9 @@ class ShareViewController: SLComposeServiceViewController {
 
         if let s = item as? String {
             return s
+        }
+        if let s = item as? NSString {
+            return s as String
         }
         if let a = item as? NSAttributedString {
             return a.string
@@ -898,6 +1383,7 @@ class ShareViewController: SLComposeServiceViewController {
             apiUrl = c.url ?? apiUrl
         }
         shareLogger.info("[DEBUG] uploadImage endpoint: \(apiUrl.absoluteString, privacy: .public)")
+        self.debugNotice("[DEBUG] uploadImage endpoint: \(apiUrl.absoluteString)")
         var request = URLRequest(url: apiUrl)
         request.httpMethod = "POST"
 
@@ -949,12 +1435,14 @@ class ShareViewController: SLComposeServiceViewController {
         request.httpBody = body
 
         shareLogger.info("Attempting import from shared image (bytes=\(payload.data.count))")
+        self.debugNotice("[DEBUG] uploadImage starting bytes=\(payload.data.count) sourceTextLen=\((sourceText ?? "").count)")
 
         let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }
 
             if let error {
                 shareLogger.error("Image upload error: \(String(describing: error), privacy: .public)")
+                self.debugNotice("[DEBUG] uploadImage error: \(String(describing: error))")
                 DispatchQueue.main.async {
                     self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
                 }
@@ -963,6 +1451,7 @@ class ShareViewController: SLComposeServiceViewController {
 
             if let http = response as? HTTPURLResponse {
                 shareLogger.info("Image upload HTTP status: \(http.statusCode)")
+                self.debugNotice("[DEBUG] uploadImage HTTP \(http.statusCode)")
                 if http.statusCode == 201 || http.statusCode == 200 {
                     DispatchQueue.main.async {
                         self.showEphemeralNoticeAndComplete(message: "Sparad till MinaRecept")
@@ -970,6 +1459,8 @@ class ShareViewController: SLComposeServiceViewController {
                 } else {
                     if let data, let body = String(data: data, encoding: .utf8) {
                         shareLogger.error("Image import failed body: \(body, privacy: .public)")
+                        let snippet = body.count > 600 ? String(body.prefix(600)) + "…" : body
+                        self.debugNotice("[DEBUG] uploadImage failed body: \(snippet)")
                     }
                     DispatchQueue.main.async {
                         self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
@@ -979,6 +1470,7 @@ class ShareViewController: SLComposeServiceViewController {
             }
 
             DispatchQueue.main.async {
+                self.debugNotice("[DEBUG] uploadImage: no HTTP response")
                 self.showEphemeralNoticeAndComplete(message: "Kunde inte spara")
             }
         }

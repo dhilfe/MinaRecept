@@ -313,9 +313,13 @@ class RecipeViewSet(OwnedModelViewSet):
                 l = line.strip()
                 if l.endswith(":"):
                     return True
-                # common headings
-                low = l.lower()
-                return low in {"ingredienser", "ingredients", "gör så här", "gor sa har", "instruktioner", "instructions", "tillagning"}
+                # common headings (allow extra punctuation/emojis, e.g. "Ingredienser👇")
+                low = l.lower().rstrip(":").strip()
+                if "ingredien" in low or low == "ingredients":
+                    return True
+                if "gör" in low or "gor" in low or "instruktion" in low or "tillag" in low or low == "instructions":
+                    return True
+                return False
 
             def normalize_heading(line: str) -> str:
                 return line.strip().rstrip(":").strip()
@@ -456,8 +460,53 @@ class RecipeViewSet(OwnedModelViewSet):
                 if s_steps and not steps:
                     steps = s_steps
 
-        # Instagram caption fallback: if we received source_text, try parsing it.
-        if source_text and (not ingredients or not steps):
+        # Instagram caption fallback:
+        # If source_url is Instagram and we have source_text, prefer it over OCR output.
+        # This avoids the common case where OCR returns mock/placeholder ingredients/steps
+        # (e.g. when OPENAI_API_KEY is missing) and blocks caption parsing.
+        is_instagram = "instagram.com" in (source_url or "").lower()
+        if source_text and is_instagram:
+            parsed_ing, parsed_steps, desc_extra = parse_caption_to_recipe(source_text)
+
+            # For Instagram thumbnail imports, OCR output is often low-signal (it's not a recipe screenshot).
+            # Prefer a caption-derived title unless the client explicitly provided one.
+            if not provided_title:
+                import re
+
+                normalized = (source_text or "").replace("\r\n", "\n").strip()
+                title_candidate = ""
+                if normalized:
+                    # If the caption is one long blob, split before common section markers.
+                    prefix = re.split(
+                        r"(?i)\b(ingredienser|ingredients|gör så här|gor sa har|instruktioner|instructions|tillagning|metod|steg)\b",
+                        normalized,
+                        maxsplit=1,
+                    )[0].strip()
+                    head = (prefix or normalized)
+                    first_line = head.split("\n", 1)[0].strip()
+                    if first_line:
+                        title_candidate = first_line
+
+                if title_candidate:
+                    title = title_candidate
+
+            # If the heading-based parser failed, fall back to the same salvage logic we use for OCR blobs.
+            if not parsed_ing and not parsed_steps:
+                s_title, s_desc, s_ing, s_steps = salvage_from_blob(source_text)
+                if s_ing:
+                    parsed_ing = s_ing
+                if s_steps:
+                    parsed_steps = s_steps
+                if s_desc and not desc_extra:
+                    desc_extra = s_desc
+
+            if parsed_ing:
+                ingredients = parsed_ing
+            if parsed_steps:
+                steps = parsed_steps
+            if desc_extra and not description:
+                description = desc_extra
+        elif source_text and (not ingredients or not steps):
             parsed_ing, parsed_steps, desc_extra = parse_caption_to_recipe(source_text)
             if parsed_ing and not ingredients:
                 ingredients = parsed_ing
