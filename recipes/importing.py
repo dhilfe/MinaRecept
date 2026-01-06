@@ -990,9 +990,12 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                 }
 
                 cookies, has_raw_cookies = _get_instagram_auth_cookies()
-                # Only do authenticated embed attempts when the user explicitly provided a full cookie string.
-                # This avoids extra requests for setups that only use sessionid.
-                should_try_auth_embed = has_raw_cookies and bool(cookies.get('sessionid'))
+                # Do authenticated embed attempts when we likely have a real logged-in cookie jar.
+                # - Full cookie string provided, OR
+                # - csrftoken provided (often required alongside sessionid for authenticated responses)
+                should_try_auth_embed = bool(cookies.get('sessionid')) and (
+                    has_raw_cookies or bool(cookies.get('csrftoken'))
+                )
 
                 for embed_url in embed_candidates:
                     resp = requests.get(embed_url, headers=headers, timeout=10)
@@ -1065,6 +1068,15 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
                                         embed_url,
                                     )
                                     return a_title_text, a_desc_text, a_img_url
+                                else:
+                                    a_snip = (getattr(auth_resp, 'text', '') or '')[:200]
+                                    logger.warning(
+                                        "Instagram authenticated embed returned no OG/caption (status=%s ct=%s url=%s body=%s)",
+                                        a_status,
+                                        a_ct,
+                                        embed_url,
+                                        a_snip,
+                                    )
                             else:
                                 logger.warning(
                                     "Instagram authenticated embed failed (status=%s ct=%s url=%s)",
