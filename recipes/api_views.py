@@ -338,7 +338,9 @@ class RecipeViewSet(OwnedModelViewSet):
                 if step_start is None and ("gör" in low or "gor" in low or "instruktion" in low or low == "instructions" or "tillag" in low):
                     step_start = i + 1
                     continue
-                if numbered_step_idx is None and re.match(r"^\s*\d+\s*[.)-]\s*\S+", ln):
+                # NOTE: don't treat "1-2 tsk ..." as a step (common ingredient amount).
+                # Accept only "1." or "1)" styles.
+                if numbered_step_idx is None and re.match(r"^\s*\d+\s*[.)]\s*\S+", ln):
                     numbered_step_idx = i
 
             # If no explicit step marker exists but we do have numbered steps, use those.
@@ -479,7 +481,7 @@ class RecipeViewSet(OwnedModelViewSet):
 
             # If still missing, try heuristic step lines like "1." / "1)"
             if not salv_steps:
-                step_lines = [ln for ln in lines if re.match(r"^\s*\d+\s*[.)-]\s*\S+", ln)]
+                step_lines = [ln for ln in lines if re.match(r"^\s*\d+\s*[.)]\s*\S+", ln)]
                 if step_lines:
                     salv_steps = "\n".join(step_lines).strip()
 
@@ -522,21 +524,37 @@ class RecipeViewSet(OwnedModelViewSet):
             # Prefer a caption-derived title unless the client explicitly provided one.
             if not provided_title:
                 import re
+                import html
 
-                normalized = (source_text or "").replace("\r\n", "\n").strip()
-                title_candidate = ""
-                if normalized:
-                    # If the caption is one long blob, split before common section markers.
-                    prefix = re.split(
-                        r"(?i)\b(ingredienser|ingredients|gör så här|gor sa har|instruktioner|instructions|tillagning|metod|steg)\b",
-                        normalized,
-                        maxsplit=1,
-                    )[0].strip()
-                    head = (prefix or normalized)
-                    first_line = head.split("\n", 1)[0].strip()
-                    if first_line:
-                        title_candidate = first_line
+                def guess_instagram_title(caption: str) -> str:
+                    t = html.unescape((caption or "")).replace("\r\n", "\n").strip()
+                    if not t:
+                        return ""
 
+                    # Strip instagram og:description prefix: "username Month DD, YYYY: \"...\""
+                    t = re.sub(r"^\S+\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}:\s*\"?", "", t).strip()
+                    t = t.strip('"')
+                    t = re.sub(r"\"\.?$", "", t).strip()
+
+                    # Remove URLs to avoid polluting the title.
+                    t = re.sub(r"https?://\S+", "", t).strip()
+
+                    # First try: extract after "recept ... på (en/ett) ..." up to punctuation.
+                    m = re.search(r"(?i)\brecept\b[^\n.!?]*?\bpå\b\s*(?:en|ett)?\s*([^\n.!?\"]+)", t)
+                    if m:
+                        candidate = m.group(1).strip()
+                        # Drop common filler words at the beginning.
+                        filler = {"en", "ett", "helt", "underbar", "magisk", "super", "supersmarrig", "supersmarrigt", "himla"}
+                        words = [w for w in re.split(r"\s+", candidate) if w]
+                        while words and words[0].lower() in filler:
+                            words.pop(0)
+                        candidate = " ".join(words).strip()
+                        return candidate
+
+                    # Fallback: first non-empty line, trimmed.
+                    return t.split("\n", 1)[0].strip()
+
+                title_candidate = guess_instagram_title(source_text)
                 if title_candidate:
                     title = title_candidate
 

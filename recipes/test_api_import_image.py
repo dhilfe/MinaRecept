@@ -187,6 +187,7 @@ class ImportImageAPITests(TestCase):
             "Dressing:\n"
             "4 msk japansk soja\n"
             "2 msk sesamolja\n"
+            "1-2 tsk sambal oelek\n"
             "Sallad:\n"
             "600 gr flankstek\n"
             "1 litet romansalladshuvud\n"
@@ -209,6 +210,7 @@ class ImportImageAPITests(TestCase):
         data = resp.json()
         self.assertIn("Dressing:", data["ingredients"])
         self.assertIn("4 msk japansk soja", data["ingredients"])
+        self.assertIn("1-2 tsk sambal oelek", data["ingredients"])
         self.assertIn("Sallad:", data["ingredients"])
         self.assertIn("600 gr flankstek", data["ingredients"])
         self.assertIn("1. Blanda ihop", data["steps"])
