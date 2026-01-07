@@ -366,3 +366,65 @@ Blanda mjöl och ägg i en skål. Tillsätt mjölken gradvis medan du vispar. St
         # Steps should have the long sentences
         self.assertIn("Blanda mjöl och ägg", data["steps"])
         self.assertIn("Stek pannkakor", data["steps"])
+
+    @patch("recipes.ocr_service.ImageRecipeParser")
+    def test_import_image_parses_subsections_with_long_steps(self, mock_parser_cls):
+        """Test multiple subsections (Biffar:, Sås:) followed by long step sentences."""
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {}
+
+        caption = """
+PANNBIFF I LÖKSÅS
+
+Biffar:
+500 g färs
+0,5 dl grädde
+1 ägg
+1 msk lökpulver
+0,5 tsk malen svartpeppar
+1 tsk salt
+0,25 tsk kryddpeppar
+
+Sås:
+2 gula lökar, skivade
+1 tärning köttbuljong
+3 dl vatten
+2 dl grädde
+1 tsk socker
+1 tsk kinesisk soja
+Salt & malen vitpeppar
+
+Stek biffarna antingen tills de är genomstekta, eller ge dom bara färg i stekpannan och låt dom sen steka klart I ugnen i 175 grader - dom ska ha en innertemperatur på 70 grader.
+Stek löken på medelvärme i en klick smör i ca 5 min- direkt i stekpannan där biffarna brynts.
+Strö över socker och låt steka ytterligare 5 min.
+Tillsätt buljongen och vattnet. Låt koka 5 minuter.
+Tillsätt grädde och soja och koka kraftigt i 5 minuter till. Smaka upp med salt och vitpeppar.
+Servera biffarna i såsen eller med såsen brevid.
+"""
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "source_url": "https://www.instagram.com/reel/DSCVeYhDI8y/", "source_text": caption},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        
+        # Ingredients should have both Biffar and Sås sections with short lines
+        self.assertIn("Biffar:", data["ingredients"])
+        self.assertIn("500 g färs", data["ingredients"])
+        self.assertIn("Sås:", data["ingredients"])
+        self.assertIn("2 gula lökar", data["ingredients"])
+        
+        # Long sentences should be steps, not ingredients
+        self.assertIn("Stek biffarna", data["steps"])
+        self.assertIn("Stek löken på medelvärme", data["steps"])
+        self.assertIn("Servera biffarna", data["steps"])
+        
+        # Make sure steps don't contain \n escapes (should be split by lines)
+        self.assertNotIn("\\n", data["steps"])
+

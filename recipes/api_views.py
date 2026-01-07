@@ -359,9 +359,17 @@ class RecipeViewSet(OwnedModelViewSet):
             ing_start = None
             step_start = None
             numbered_step_idx = None
+            first_subsection_idx = None  # Track first colon-ending line (like "Biffar:" or "Sås:")
+            
             for i, ln in enumerate(lines):
                 # Strip parentheses for comparison
                 low = re.sub(r"\(.*?\)", "", ln).lower().rstrip(":").strip()
+                
+                # Track first subsection heading (ends with colon, not a major heading)
+                if first_subsection_idx is None and ln.strip().endswith(":"):
+                    if not any(kw in low for kw in ["ingredien", "recept", "gör", "gor", "instruktion", "tillag"]):
+                        first_subsection_idx = i
+                
                 # Accept "Ingredienser", "Ingredients", or "Recept" as ingredient marker
                 if ing_start is None and ("ingredien" in low or low == "ingredients" or low == "recept"):
                     ing_start = i + 1
@@ -377,6 +385,11 @@ class RecipeViewSet(OwnedModelViewSet):
                 # Accept only "1." or "1)" styles.
                 if numbered_step_idx is None and re.match(r"^\s*\d+\s*[.)]\s*\S+", ln):
                     numbered_step_idx = i
+            
+            # Fallback: if no explicit ingredient marker but we have subsections (e.g., "Biffar:", "Sås:"),
+            # treat first subsection as start of ingredient section.
+            if ing_start is None and first_subsection_idx is not None:
+                ing_start = first_subsection_idx
 
             # If no explicit step marker exists but we do have numbered steps, use those.
             if step_start is None and numbered_step_idx is not None:
@@ -542,11 +555,15 @@ class RecipeViewSet(OwnedModelViewSet):
             # Preserve headings like "Dressing:" by converting to a plain heading line.
             # We'll add them if we see lines ending with ":" in the relevant span.
             def add_headings(start_idx: int | None, collected: list[str]) -> list[str]:
+                """Process lines starting from start_idx, preserving subsection headings.
+                
+                Stop when hitting long sentences (likely steps) if we're in ingredient section.
+                """
                 if start_idx is None:
                     return collected
                 out: list[str] = []
                 for ln in lines[start_idx:]:
-                    if is_heading(ln) and ("ingredien" in ln.lower() or "gör" in ln.lower() or "instruktion" in ln.lower()):
+                    if is_heading(ln) and ("ingredien" in ln.lower() or "gör" in ln.lower() or "instruktion" in ln.lower() or "recept" in ln.lower()):
                         # Stop at next major section
                         break
                     if ln.endswith(":") and normalize_heading(ln):
@@ -554,7 +571,13 @@ class RecipeViewSet(OwnedModelViewSet):
                         continue
                     if is_heading(ln):
                         break
-                    s = re.sub(r"^[-•*]+\\s*", "", ln).strip()
+                    
+                    s = ln.strip()
+                    # Stop if we hit a long sentence (likely a step, not ingredient)
+                    if len(s) > 40 or (len(s.split()) > 5):
+                        break
+                    
+                    s = re.sub(r"^[-•*]+\\s*", "", s).strip()
                     if s:
                         out.append(s)
                 # fallback to original collected if we got nothing
@@ -563,6 +586,35 @@ class RecipeViewSet(OwnedModelViewSet):
             ing_lines = add_headings(ing_start, ing_lines)
             # Don't re-process step_lines with add_headings as we've already filtered/normalized them.
             # step_lines = add_headings(step_start, step_lines)
+            
+            # After add_headings processes ingredients and stops at long sentences,
+            # collect those long sentences as steps if we don't have explicit steps yet.
+            if ing_lines and not step_lines and ing_start is not None:
+                # Find where add_headings stopped (first long sentence after ing_start)
+                step_start_idx = None
+                for i, ln in enumerate(lines[ing_start:], start=ing_start):
+                    if is_heading(ln) and any(kw in ln.lower() for kw in ["ingredien", "gör", "instruktion", "recept"]):
+                        break
+                    # Skip subsection headings and already-collected ingredient lines
+                    if ln.strip().endswith(":"):
+                        continue
+                    s = ln.strip()
+                    if s and (len(s) > 40 or len(s.split()) > 5):
+                        step_start_idx = i
+                        break
+                
+                if step_start_idx is not None:
+                    potential_steps = []
+                    for ln in lines[step_start_idx:]:
+                        s = ln.strip()
+                        if not s or s.startswith("#"):
+                            continue
+                        if s.startswith("(") and s.endswith(")"):
+                            continue
+                        potential_steps.append(s)
+                    
+                    if potential_steps:
+                        step_lines = potential_steps
 
             return "\\n".join(ing_lines).strip(), "\\n".join(step_lines).strip(), ""
 
