@@ -278,3 +278,91 @@ Gör så här:
         self.assertNotIn("Funkar även med kyckling", steps)
         self.assertIn("Stek biffen", steps)
         self.assertIn("Servera med sallad", steps)
+
+    @patch("recipes.ocr_service.ImageRecipeParser")
+    def test_import_image_handles_step_heading_variations(self, mock_parser_cls):
+        """Test variations of 'Gör så här' heading: typos, spacing, parentheses."""
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {}
+
+        # Test "För så här" (typo), "Gör såhär" (no space), and heading with parentheses
+        captions = [
+            """
+Ingredienser:
+- Ägg
+För så här:
+1. Rör ihop
+2. Stek
+""",
+            """
+Ingredienser:
+- Mjöl
+Gör såhär:
+1. Blanda
+2. Grädda
+""",
+            """
+Ingredienser:
+- Pasta
+Gör så här (tar typ 5 minuter):
+1. Koka pasta
+2. Häll av vattnet
+""",
+            """
+Ingredienser:
+- Sallad
+Så här gör du:
+1. Hacka grönsaker
+2. Blanda
+""",
+        ]
+
+        for caption in captions:
+            with self.subTest(caption=caption[:50]):
+                img = BytesIO(b"fake image data")
+                img.name = "test.jpg"
+
+                resp = self.client.post(
+                    "/api/recipes/import-image/",
+                    data={"image": img, "source_url": "https://www.instagram.com/reel/ABC/", "source_text": caption},
+                    format="multipart",
+                )
+
+                self.assertEqual(resp.status_code, 201)
+                data = resp.json()
+                self.assertTrue(data["ingredients"], f"Should have ingredients for: {caption[:30]}")
+                self.assertTrue(data["steps"], f"Should have steps for: {caption[:30]}")
+
+    @patch("recipes.ocr_service.ImageRecipeParser")
+    def test_import_image_parses_recept_format_with_long_sentences(self, mock_parser_cls):
+        """Test 'Recept:' heading followed by short ingredient lines and long sentence steps."""
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {}
+
+        caption = """
+Recept:
+2 dl mjöl
+3 ägg
+1 dl mjölk
+Blanda mjöl och ägg i en skål. Tillsätt mjölken gradvis medan du vispar. Stek pannkakor i smör tills de är gyllene på båda sidor.
+"""
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "source_url": "https://www.instagram.com/reel/XYZ/", "source_text": caption},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        
+        # Ingredients should have the short lines
+        self.assertIn("mjöl", data["ingredients"])
+        self.assertIn("ägg", data["ingredients"])
+        
+        # Steps should have the long sentences
+        self.assertIn("Blanda mjöl och ägg", data["steps"])
+        self.assertIn("Stek pannkakor", data["steps"])

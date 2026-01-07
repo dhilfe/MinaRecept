@@ -339,26 +339,38 @@ class RecipeViewSet(OwnedModelViewSet):
                 if l.endswith(":"):
                     return True
                 # common headings (allow extra punctuation/emojis, e.g. "Ingredienser👇")
-                low = l.lower().rstrip(":").strip()
-                if "ingredien" in low or low == "ingredients":
+                # Strip parenthetical info like "Gör så här (tar typ 5 minuter)"
+                low = re.sub(r"\(.*?\)", "", l).lower().rstrip(":").strip()
+                if "ingredien" in low or low == "ingredients" or low == "recept":
                     return True
-                if "gör" in low or "gor" in low or "instruktion" in low or "tillag" in low or low == "instructions":
+                # Accept common variations: "Gör så här", "Gör såhär", "För så här" (typo), "Så här gör du"
+                if any(pattern in low for pattern in ["gör så", "gör sa", "görsåhär", "görsahar", "för så här", "så här gör"]):
+                    return True
+                if "instruktion" in low or "tillag" in low or low == "instructions":
                     return True
                 return False
 
             def normalize_heading(line: str) -> str:
-                return line.strip().rstrip(":").strip()
+                # Strip parenthetical info and normalize
+                s = re.sub(r"\(.*?\)", "", line).strip().rstrip(":").strip()
+                return s
 
             # Identify sections
             ing_start = None
             step_start = None
             numbered_step_idx = None
             for i, ln in enumerate(lines):
-                low = ln.lower().rstrip(":").strip()
-                if ing_start is None and ("ingredien" in low or low == "ingredients"):
+                # Strip parentheses for comparison
+                low = re.sub(r"\(.*?\)", "", ln).lower().rstrip(":").strip()
+                # Accept "Ingredienser", "Ingredients", or "Recept" as ingredient marker
+                if ing_start is None and ("ingredien" in low or low == "ingredients" or low == "recept"):
                     ing_start = i + 1
                     continue
-                if step_start is None and ("gör" in low or "gor" in low or "instruktion" in low or low == "instructions" or "tillag" in low):
+                # Accept variations: "Gör så här", "För så här", "Gör såhär", "Så här gör du"
+                if step_start is None and any(pattern in low for pattern in ["gör så", "gör sa", "görsåhär", "görsahar", "för så här", "så här gör"]):
+                    step_start = i + 1
+                    continue
+                if step_start is None and ("instruktion" in low or low == "instructions" or "tillag" in low):
                     step_start = i + 1
                     continue
                 # NOTE: don't treat "1-2 tsk ..." as a step (common ingredient amount).
@@ -370,11 +382,16 @@ class RecipeViewSet(OwnedModelViewSet):
             if step_start is None and numbered_step_idx is not None:
                 step_start = numbered_step_idx
 
-            def collect_until_next_heading(start_idx: int | None) -> list[str]:
+            def collect_until_next_heading(start_idx: int | None, is_ingredient_section: bool = False) -> list[str]:
+                """Collect lines until next heading. 
+                
+                If is_ingredient_section=True and we're after a 'Recept' heading, stop when we hit
+                long sentences (likely steps).
+                """
                 if start_idx is None:
                     return []
                 out: list[str] = []
-                for ln in lines[start_idx:]:
+                for i, ln in enumerate(lines[start_idx:], start=start_idx):
                     if is_heading(ln):
                         break
                     if ln.lstrip().startswith("#"):
@@ -383,8 +400,15 @@ class RecipeViewSet(OwnedModelViewSet):
                     # Ignore parenthetical notes/tips at line level too.
                     if ln.strip().startswith("(") and ln.strip().endswith(")"):
                         continue
+                    
+                    s = ln.strip()
+                    # If this is ingredient section after "Recept:" and line is long (>40 chars or >5 words),
+                    # treat it as the start of steps instead.
+                    if is_ingredient_section and (len(s) > 40 or len(s.split()) > 5):
+                        break
+                    
                     # strip bullet markers
-                    s = re.sub(r"^[-•*]+\\s*", "", ln).strip()
+                    s = re.sub(r"^[-•*]+\\s*", "", s).strip()
                     if s:
                         out.append(s)
                 return out
@@ -426,7 +450,13 @@ class RecipeViewSet(OwnedModelViewSet):
 
                 return out
 
-            ing_lines = collect_until_next_heading(ing_start)
+            # Check if this is a "Recept:" heading (ingredient marker variation)
+            is_recept_heading = ing_start is not None and ing_start > 0
+            if is_recept_heading:
+                prev_line = lines[ing_start - 1].lower().strip().rstrip(":")
+                is_recept_heading = prev_line == "recept"
+
+            ing_lines = collect_until_next_heading(ing_start, is_ingredient_section=is_recept_heading)
             step_lines = collect_until_next_heading(step_start)
 
             # Filter out parenthetical notes from step_lines before processing.
@@ -487,6 +517,27 @@ class RecipeViewSet(OwnedModelViewSet):
             # If no explicit section markers, keep caption as description only.
             if not ing_lines and not step_lines:
                 return "", "", raw.strip()
+            
+            # Special case: "Recept" marker followed by short lines (ingredients) then long sentences (steps).
+            # This is when there's a "Recept:" heading, ingredients listed, but no explicit step marker.
+            # After ingredients end, long sentences (> 40 chars or containing multiple words) become steps.
+            if ing_lines and not step_lines and ing_start is not None:
+                # Check if remaining lines after ingredients are long sentences (likely steps).
+                remaining_start = ing_start + len(ing_lines)
+                if remaining_start < len(lines):
+                    potential_steps = []
+                    for ln in lines[remaining_start:]:
+                        s = ln.strip()
+                        if not s or s.startswith("#"):
+                            continue
+                        if s.startswith("(") and s.endswith(")"):
+                            continue
+                        # If line is long or sentence-like (has spaces and > 40 chars), treat as step.
+                        if len(s) > 40 or (len(s.split()) > 5):
+                            potential_steps.append(s)
+                    
+                    if potential_steps:
+                        step_lines = potential_steps
 
             # Preserve headings like "Dressing:" by converting to a plain heading line.
             # We'll add them if we see lines ending with ":" in the relevant span.
