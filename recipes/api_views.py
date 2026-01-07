@@ -169,6 +169,29 @@ class RecipeViewSet(OwnedModelViewSet):
     queryset = Recipe.objects.all().order_by('-updated_at', '-created_at')
     serializer_class = RecipeSerializer
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        # Filter by search query (title, ingredients, tags)
+        search = self.request.query_params.get('search', '').strip()
+        if search:
+            from django.db.models import Q
+            queryset = queryset.filter(
+                Q(title__icontains=search) |
+                Q(ingredients__icontains=search) |
+                Q(tags__icontains=search)
+            )
+        
+        # Filter by specific tags
+        tags = self.request.query_params.get('tags', '').strip()
+        if tags:
+            # Support comma-separated tags: "snabb,enkel"
+            tag_list = [t.strip().lower() for t in tags.split(',') if t.strip()]
+            for tag in tag_list:
+                queryset = queryset.filter(tags__icontains=tag)
+        
+        return queryset
+
     @action(detail=False, methods=['post'], url_path='import')
     def import_from_url(self, request):
         url = (request.data.get('url') or '').strip()
@@ -354,14 +377,64 @@ class RecipeViewSet(OwnedModelViewSet):
                 for ln in lines[start_idx:]:
                     if is_heading(ln):
                         break
+                    if ln.lstrip().startswith("#"):
+                        # Ignore hashtags.
+                        continue
+                    # Ignore parenthetical notes/tips at line level too.
+                    if ln.strip().startswith("(") and ln.strip().endswith(")"):
+                        continue
                     # strip bullet markers
                     s = re.sub(r"^[-•*]+\\s*", "", ln).strip()
                     if s:
                         out.append(s)
                 return out
 
+            def normalize_numbered_steps(raw_steps: list[str]) -> list[str]:
+                """Merge continuation lines into the preceding numbered step and strip leading numbers.
+
+                The iOS UI numbers each step itself, so returning "1. ..." would duplicate numbering.
+                """
+                out: list[str] = []
+                current: str = ""
+
+                for ln in raw_steps:
+                    s = ln.strip()
+                    if not s:
+                        continue
+                    if s.startswith("#"):
+                        continue
+                    # Ignore lines that are parenthetical notes/tips (common at end of captions).
+                    if s.startswith("(") and s.endswith(")"):
+                        continue
+
+                    m = re.match(r"^\s*\d+\s*[.)]\s*(\S.+)$", s)
+                    if m:
+                        if current:
+                            out.append(current.strip())
+                        current = m.group(1).strip()
+                        continue
+
+                    # Continuation line (belongs to the previous step)
+                    if current:
+                        current = (current + " " + s).strip()
+                    else:
+                        # If we somehow start with a continuation, treat as its own step.
+                        current = s
+
+                if current:
+                    out.append(current.strip())
+
+                return out
+
             ing_lines = collect_until_next_heading(ing_start)
             step_lines = collect_until_next_heading(step_start)
+
+            # Filter out parenthetical notes from step_lines before processing.
+            step_lines = [ln for ln in step_lines if not (ln.strip().startswith("(") and ln.strip().endswith(")"))]
+
+            # If steps look like numbered steps, merge continuation lines and strip numbering.
+            if step_lines and any(re.match(r"^\s*\d+\s*[.)]\s*\S+", ln) for ln in step_lines):
+                step_lines = normalize_numbered_steps(step_lines)
 
             # Common Reel caption format:
             # Intro text -> "Dressing:" block -> "Sallad:" block -> numbered steps.
@@ -394,12 +467,19 @@ class RecipeViewSet(OwnedModelViewSet):
 
                 # Prefer whatever we already collected for steps (it starts at the numbered lines).
                 step_out = [s for s in step_lines if s and not s.strip().startswith("#")]
+                if step_out and any(re.match(r"^\s*\d+\s*[.)]\s*\S+", ln) for ln in step_out):
+                    step_out = normalize_numbered_steps(step_out)
                 if not step_out:
+                    raw_step_lines: list[str] = []
                     for ln in lines[numbered_step_idx:]:
                         s = ln.strip()
                         if not s or s.startswith("#"):
                             continue
-                        step_out.append(s)
+                        raw_step_lines.append(s)
+                    if any(re.match(r"^\s*\d+\s*[.)]\s*\S+", ln) for ln in raw_step_lines):
+                        step_out = normalize_numbered_steps(raw_step_lines)
+                    else:
+                        step_out = raw_step_lines
 
                 if ing_out or step_out or desc_extra:
                     return "\n".join(ing_out).strip(), "\n".join(step_out).strip(), desc_extra
@@ -430,7 +510,8 @@ class RecipeViewSet(OwnedModelViewSet):
                 return out or collected
 
             ing_lines = add_headings(ing_start, ing_lines)
-            step_lines = add_headings(step_start, step_lines)
+            # Don't re-process step_lines with add_headings as we've already filtered/normalized them.
+            # step_lines = add_headings(step_start, step_lines)
 
             return "\\n".join(ing_lines).strip(), "\\n".join(step_lines).strip(), ""
 
@@ -607,11 +688,24 @@ class RecipeViewSet(OwnedModelViewSet):
 
         # Cap title to model constraint to avoid 500s from DB truncation.
         title = (title or "").strip()[:200]
+        if title:
+            title = title[:1].upper() + title[1:]
         if provided_title and not title:
             title = provided_title.strip()[:200]
         if not title and source_text:
             first = source_text.splitlines()[0].strip()
             title = first[:200]
+
+        # Extract hashtags from source_text (Instagram captions) and save as tags.
+        extracted_tags = ""
+        if source_text:
+            import re
+            hashtag_pattern = r"#(\w+)"
+            hashtags = re.findall(hashtag_pattern, source_text)
+            if hashtags:
+                # Deduplicate and clean: lowercase, unique.
+                unique_tags = list(dict.fromkeys([tag.lower() for tag in hashtags]))
+                extracted_tags = ", ".join(unique_tags)
 
         recipe = Recipe.objects.create(
             user=request.user,
@@ -622,6 +716,7 @@ class RecipeViewSet(OwnedModelViewSet):
             cooking_time=max(1, cooking_time) if cooking_time else 30,
             servings=max(1, servings) if servings else 4,
             dish_type=dish_type or Recipe._meta.get_field("dish_type").default,
+            tags=extracted_tags,
         )
 
         # Best-effort: save the uploaded image on the recipe as well.

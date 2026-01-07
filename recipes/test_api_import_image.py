@@ -174,7 +174,7 @@ class ImportImageAPITests(TestCase):
         self.assertEqual(data["title"], "Asiatisk biffsallad")
         self.assertIn("Originalreceptet är från https://www.instagram.com/reel/ABC/", data["description"])
         self.assertIn("1 st lime", data["ingredients"])
-        self.assertIn("1. Blanda.", data["steps"])
+        self.assertIn("Blanda.", data["steps"])
 
 
     @patch("recipes.ocr_service.ImageRecipeParser")
@@ -213,6 +213,68 @@ class ImportImageAPITests(TestCase):
         self.assertIn("1-2 tsk sambal oelek", data["ingredients"])
         self.assertIn("Sallad:", data["ingredients"])
         self.assertIn("600 gr flankstek", data["ingredients"])
-        self.assertIn("1. Blanda ihop", data["steps"])
+        self.assertIn("Blanda ihop", data["steps"])
 
+    @patch("recipes.ocr_service.ImageRecipeParser")
+    def test_import_image_extracts_hashtags_from_instagram_caption(self, mock_parser_cls):
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {}
 
+        caption = """
+Asiatisk biffsallad 🥗
+#snabbt #enkelt #middag #nyttigt
+Ingredienser:
+- Biff
+- Sallad
+1. Stek biffen.
+2. Servera.
+"""
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "source_url": "https://www.instagram.com/reel/ABC/", "source_text": caption},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        tags = data["tags"]
+        self.assertIn("snabbt", tags)
+        self.assertIn("enkelt", tags)
+        self.assertIn("middag", tags)
+        self.assertIn("nyttigt", tags)
+
+    @patch("recipes.ocr_service.ImageRecipeParser")
+    def test_import_image_ignores_parenthetical_notes_in_steps(self, mock_parser_cls):
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {}
+
+        caption = """
+Recept på sallad
+Ingredienser:
+- Biff
+Gör så här:
+1. Stek biffen.
+2. Servera med sallad.
+(Funkar även med kyckling, tofu eller halloumi om man vill byta ut biff)
+"""
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "source_url": "https://www.instagram.com/reel/XYZ/", "source_text": caption},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        steps = data["steps"]
+        # Should have exactly 2 steps, without the parenthetical note.
+        self.assertNotIn("Funkar även med kyckling", steps)
+        self.assertIn("Stek biffen", steps)
+        self.assertIn("Servera med sallad", steps)
