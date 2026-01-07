@@ -328,8 +328,11 @@ class RecipeViewSet(OwnedModelViewSet):
 
             # Instagram captions may contain HTML entities (e.g. "p&#xe5;", "&#x1f31f;").
             raw = html.unescape((text or "")).replace("\r\n", "\n").replace("\r", "\n")
+            # Some IG/OG sources may include literal "\n" sequences instead of actual newlines.
+            raw = raw.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
+
             # Remove obvious URLs
-            raw = re.sub(r"https?://\\S+", "", raw)
+            raw = re.sub(r"https?://\S+", "", raw)
             lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
             if not lines:
                 return "", "", ""
@@ -527,36 +530,17 @@ class RecipeViewSet(OwnedModelViewSet):
                 if ing_out or step_out or desc_extra:
                     return "\n".join(ing_out).strip(), "\n".join(step_out).strip(), desc_extra
 
-            # If no explicit section markers, keep caption as description only.
-            if not ing_lines and not step_lines:
+            # If we truly have no markers at all, keep caption as description only.
+            # (Important: don't early-return just because the initial collectors returned empty;
+            # add_headings() may still recover ingredients from subsection headings like "Biffar:".)
+            if ing_start is None and step_start is None and numbered_step_idx is None:
                 return "", "", raw.strip()
-            
-            # Special case: "Recept" marker followed by short lines (ingredients) then long sentences (steps).
-            # This is when there's a "Recept:" heading, ingredients listed, but no explicit step marker.
-            # After ingredients end, long sentences (> 40 chars or containing multiple words) become steps.
-            if ing_lines and not step_lines and ing_start is not None:
-                # Check if remaining lines after ingredients are long sentences (likely steps).
-                remaining_start = ing_start + len(ing_lines)
-                if remaining_start < len(lines):
-                    potential_steps = []
-                    for ln in lines[remaining_start:]:
-                        s = ln.strip()
-                        if not s or s.startswith("#"):
-                            continue
-                        if s.startswith("(") and s.endswith(")"):
-                            continue
-                        # If line is long or sentence-like (has spaces and > 40 chars), treat as step.
-                        if len(s) > 40 or (len(s.split()) > 5):
-                            potential_steps.append(s)
-                    
-                    if potential_steps:
-                        step_lines = potential_steps
 
             # Preserve headings like "Dressing:" by converting to a plain heading line.
             # We'll add them if we see lines ending with ":" in the relevant span.
             def add_headings(start_idx: int | None, collected: list[str]) -> list[str]:
                 """Process lines starting from start_idx, preserving subsection headings.
-                
+
                 Stop when hitting long sentences (likely steps) if we're in ingredient section.
                 """
                 if start_idx is None:
@@ -571,12 +555,12 @@ class RecipeViewSet(OwnedModelViewSet):
                         continue
                     if is_heading(ln):
                         break
-                    
+
                     s = ln.strip()
                     # Stop if we hit a long sentence (likely a step, not ingredient)
                     if len(s) > 40 or (len(s.split()) > 5):
                         break
-                    
+
                     s = re.sub(r"^[-•*]+\\s*", "", s).strip()
                     if s:
                         out.append(s)
@@ -586,7 +570,7 @@ class RecipeViewSet(OwnedModelViewSet):
             ing_lines = add_headings(ing_start, ing_lines)
             # Don't re-process step_lines with add_headings as we've already filtered/normalized them.
             # step_lines = add_headings(step_start, step_lines)
-            
+
             # After add_headings processes ingredients and stops at long sentences,
             # collect those long sentences as steps if we don't have explicit steps yet.
             if ing_lines and not step_lines and ing_start is not None:
@@ -595,14 +579,14 @@ class RecipeViewSet(OwnedModelViewSet):
                 for i, ln in enumerate(lines[ing_start:], start=ing_start):
                     if is_heading(ln) and any(kw in ln.lower() for kw in ["ingredien", "gör", "instruktion", "recept"]):
                         break
-                    # Skip subsection headings and already-collected ingredient lines
+                    # Skip subsection headings
                     if ln.strip().endswith(":"):
                         continue
                     s = ln.strip()
                     if s and (len(s) > 40 or len(s.split()) > 5):
                         step_start_idx = i
                         break
-                
+
                 if step_start_idx is not None:
                     potential_steps = []
                     for ln in lines[step_start_idx:]:
@@ -612,11 +596,15 @@ class RecipeViewSet(OwnedModelViewSet):
                         if s.startswith("(") and s.endswith(")"):
                             continue
                         potential_steps.append(s)
-                    
+
                     if potential_steps:
                         step_lines = potential_steps
 
-            return "\\n".join(ing_lines).strip(), "\\n".join(step_lines).strip(), ""
+            # If we still couldn't extract any structure, keep caption as description only.
+            if not ing_lines and not step_lines:
+                return "", "", raw.strip()
+
+            return "\n".join(ing_lines).strip(), "\n".join(step_lines).strip(), ""
 
         def salvage_from_blob(blob: str):
             """
