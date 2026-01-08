@@ -446,7 +446,14 @@ class ShareViewController: SLComposeServiceViewController {
             }
         }
 
+        // Defer attachment scanning until the UI is visible; this can otherwise add seconds
+        // before the compose sheet shows up (depending on the host app / item providers).
+        if self.sharedURL == nil {
+            self.loadSharedURLIfAvailable()
+        }
+
         // Now that we likely have a title in the compose text, attempt to guess a good category.
+        // If the URL arrives later, loadSharedURLIfAvailable() will call autoGuess again.
         self.autoGuessDishTypeIfNeeded(title: self.textView.text, url: self.sharedURL)
     }
 
@@ -454,7 +461,6 @@ class ShareViewController: SLComposeServiceViewController {
         super.viewDidLoad()
         self.debugNotice("[DEBUG] ShareViewController.viewDidLoad")
         self.debugDumpIncomingAttachments(context: "viewDidLoad")
-        self.loadSharedURLIfAvailable()
     }
 
     override func didSelectPost() {

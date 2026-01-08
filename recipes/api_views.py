@@ -356,8 +356,28 @@ class RecipeViewSet(OwnedModelViewSet):
                 ) is not None
 
             def is_numbered_step_line(line: str) -> bool:
-                # NOTE: avoid treating ingredient quantities like "1-2 tsk" as steps.
-                return re.match(r"^\s*\d+\s*[.)]\s*\S+", (line or "").strip()) is not None
+                """Detect step lines that start with numbering.
+
+                We accept:
+                - "1." / "1)" styles
+                - "1 <verb> ..." styles (common in captions)
+
+                We deliberately avoid matching ingredient quantities like "1 dl" or ranges like "1-2 tsk".
+                """
+                s = (line or "").strip()
+                if not s:
+                    return False
+
+                # Strong signal: explicit punctuation after the number.
+                if re.match(r"^\s*\d+\s*[.)]\s*\S+", s):
+                    return True
+
+                # Also accept bare "1 <...>" but only if what follows looks like a step (starts with a verb).
+                m = re.match(r"^\s*(\d+)\s+(\S.+)$", s)
+                if not m:
+                    return False
+                rest = m.group(2).strip()
+                return looks_like_step_line(rest)
 
             def is_heading(line: str) -> bool:
                 l = line.strip()
@@ -407,8 +427,8 @@ class RecipeViewSet(OwnedModelViewSet):
                     step_start = i + 1
                     continue
                 # NOTE: don't treat "1-2 tsk ..." as a step (common ingredient amount).
-                # Accept only "1." or "1)" styles.
-                if numbered_step_idx is None and re.match(r"^\s*\d+\s*[.)]\s*\S+", ln):
+                # Accept numbered steps including "1."/"1)" and "1 <verb>".
+                if numbered_step_idx is None and is_numbered_step_line(ln):
                     numbered_step_idx = i
             
             # Fallback: if no explicit ingredient marker but we have subsections (e.g., "Biffar:", "Sås:"),
@@ -475,6 +495,13 @@ class RecipeViewSet(OwnedModelViewSet):
                         current = m.group(1).strip()
                         continue
 
+                    m2 = re.match(r"^\s*\d+\s+(\S.+)$", s)
+                    if m2 and looks_like_step_line(m2.group(1)):
+                        if current:
+                            out.append(current.strip())
+                        current = m2.group(1).strip()
+                        continue
+
                     # Continuation line (belongs to the previous step)
                     if current:
                         current = (current + " " + s).strip()
@@ -500,7 +527,7 @@ class RecipeViewSet(OwnedModelViewSet):
             step_lines = [ln for ln in step_lines if not (ln.strip().startswith("(") and ln.strip().endswith(")"))]
 
             # If steps look like numbered steps, merge continuation lines and strip numbering.
-            if step_lines and any(re.match(r"^\s*\d+\s*[.)]\s*\S+", ln) for ln in step_lines):
+            if step_lines and any(is_numbered_step_line(ln) for ln in step_lines):
                 step_lines = normalize_numbered_steps(step_lines)
 
             # Common Reel caption format:
@@ -534,7 +561,7 @@ class RecipeViewSet(OwnedModelViewSet):
 
                 # Prefer whatever we already collected for steps (it starts at the numbered lines).
                 step_out = [s for s in step_lines if s and not s.strip().startswith("#")]
-                if step_out and any(re.match(r"^\s*\d+\s*[.)]\s*\S+", ln) for ln in step_out):
+                if step_out and any(is_numbered_step_line(ln) for ln in step_out):
                     step_out = normalize_numbered_steps(step_out)
                 if not step_out:
                     raw_step_lines: list[str] = []
@@ -543,7 +570,7 @@ class RecipeViewSet(OwnedModelViewSet):
                         if not s or s.startswith("#"):
                             continue
                         raw_step_lines.append(s)
-                    if any(re.match(r"^\s*\d+\s*[.)]\s*\S+", ln) for ln in raw_step_lines):
+                    if any(is_numbered_step_line(ln) for ln in raw_step_lines):
                         step_out = normalize_numbered_steps(raw_step_lines)
                     else:
                         step_out = raw_step_lines
