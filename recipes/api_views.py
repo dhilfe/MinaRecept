@@ -323,6 +323,8 @@ class RecipeViewSet(OwnedModelViewSet):
         cooking_time = safe_int(data.get("cooking_time"), default=0)
         servings = safe_int(data.get("servings"), default=4)
 
+        caption_ingredients_duplicate_steps = False
+
         def parse_caption_to_recipe(text: str) -> tuple[str, str, str]:
             """
             Best-effort parse for Instagram captions.
@@ -808,10 +810,10 @@ class RecipeViewSet(OwnedModelViewSet):
                 norm_steps = _norm(parsed_steps)
                 if len(norm_ing) >= 80 and norm_ing == norm_steps:
                     logger.info(
-                        "Instagram caption parse produced identical ingredients/steps; forcing ingredients empty for OCR fallback (source_url=%s)",
+                        "Instagram caption parse produced identical ingredients/steps; will allow OCR to overwrite ingredients (source_url=%s)",
                         source_url,
                     )
-                    parsed_ing = ""
+                    caption_ingredients_duplicate_steps = True
 
             if parsed_ing:
                 ingredients = parsed_ing
@@ -831,7 +833,9 @@ class RecipeViewSet(OwnedModelViewSet):
         # Instagram + caption optimization can leave us with missing sections
         # when the caption doesn't include ingredients/steps but the uploaded image does.
         # Only attempt OCR fallback if an API key is configured (avoid mock data).
-        if is_instagram and source_text and (not ingredients or not steps):
+        if is_instagram and source_text and (
+            (not ingredients or not steps) or caption_ingredients_duplicate_steps
+        ):
             try:
                 from .ocr_service import ImageRecipeParser
 
@@ -845,7 +849,7 @@ class RecipeViewSet(OwnedModelViewSet):
                     logger.info(
                         "Instagram image import OCR fallback start (source_url=%s need_ingredients=%s need_steps=%s)",
                         source_url,
-                        bool(not ingredients),
+                        bool((not ingredients) or caption_ingredients_duplicate_steps),
                         bool(not steps),
                     )
                     try:
@@ -857,7 +861,9 @@ class RecipeViewSet(OwnedModelViewSet):
                         ocr_ingredients = (parsed.get("ingredients") or "").strip()
                         ocr_steps = (parsed.get("steps") or "").strip()
                         # Fill only missing fields; keep caption-derived content when present.
-                        if ocr_ingredients and not ingredients:
+                        if ocr_ingredients and (
+                            (not ingredients) or caption_ingredients_duplicate_steps
+                        ):
                             ingredients = ocr_ingredients
                         if ocr_steps and not steps:
                             steps = ocr_steps
