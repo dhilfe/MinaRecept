@@ -1,5 +1,9 @@
 # MinaRecept - Att göra
 
+## Kända problem (Known issues)
+
+- **Instagram Reels-import:** Om ingredienserna bara syns som text i videon (overlay i frames) och inte finns i captionen eller i den bild/thumbnail som iOS delar, kan backend inte extrahera ingredienser. Workaround: dela en screenshot som innehåller ingredienserna, eller fyll i manuellt efter import.
+
 - [x] **Välkomstsida vid första appstart**
     - [x] Skapa en välkomstsida som visas första gången appen startas (text finns sparad, se bilder på telefonen).
 
@@ -88,6 +92,20 @@
     - [ ] Responsivitetstest: Meny på mobil
 
 ## Fas 2: Externa Integrationer & Avancerade funktioner
+
+- [ ] **Taggar (förbättringar)**
+    - [ ] Lägga till så att man kan skriva in egna taggar direkt när man sparar ner ett recept (iOS + web)
+    - [ ] Söka/filtrera recept bland sina sparade recept på taggar (iOS + web)
+    - [ ] Smart föreslå taggar vid sparande av nytt recept (egen skrivet eller vid import)
+    - [ ] Taggar är user-specifik (per användare)
+
+- [ ] **Web/App gemensam yta och look**
+    - [ ] Omarbeta utseende för webgränssnittet så att det efterliknar appen
+    - [ ] Säkerställ att data som sparas på webb/app dyker upp på båda ställena oavsett vart det sparas
+
+- [ ] **Inspiration (iOS)**
+    - [ ] Lägg till en flik i appens startsida som heter ”Inspiration”
+    - [ ] Innehåller en förpopulerad lista av recept (global) som användaren kan importera till sitt egna bibliotek
 
 - [x] **iOS-spår: förutsättningar för iOS-app (backend)**
     - [x] Lägg till REST API-ramverk (DRF) + grundkonfiguration
