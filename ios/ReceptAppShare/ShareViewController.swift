@@ -20,6 +20,7 @@ class ShareViewController: SLComposeServiceViewController {
     private var selectedDishType: (id: String, name: String) = ("lunch_dinner", "Lunch/Middag")
     private var didAutoGuessDishType = false
     private var sharedURL: URL?
+    private var customTags: String = ""
 
     private func debugDumpIncomingAttachments(context: String) {
 #if !DEBUG
@@ -1089,7 +1090,39 @@ class ShareViewController: SLComposeServiceViewController {
             self.pushConfigurationViewController(selector)
         }
 
-        return [categoryItem as Any].compactMap { $0 }
+        let tagsItem = SLComposeSheetConfigurationItem()
+        tagsItem?.title = "Taggar"
+        let normalized = Self.normalizeTags(self.customTags)
+        tagsItem?.value = normalized.isEmpty ? "Inga" : normalized
+        tagsItem?.tapHandler = { [weak self] in
+            guard let self else { return }
+            let editor = TagsEntryViewController(initialText: self.customTags) { [weak self] updated in
+                guard let self else { return }
+                self.customTags = updated
+                self.reloadConfigurationItems()
+                self.popConfigurationViewController()
+            }
+            self.pushConfigurationViewController(editor)
+        }
+
+        return [categoryItem as Any, tagsItem as Any].compactMap { $0 }
+    }
+
+    private static func normalizeTags(_ raw: String) -> String {
+        let parts = raw
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        var seen = Set<String>()
+        var out: [String] = []
+        for p in parts {
+            let key = p.lowercased()
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            out.append(p)
+        }
+        return out.joined(separator: ", ")
     }
 
     private var apiBaseURL: URL {
@@ -1281,6 +1314,10 @@ class ShareViewController: SLComposeServiceViewController {
             "url": url.absoluteString,
             "dish_type": selectedDishType.id,
         ]
+        let normalizedTags = Self.normalizeTags(self.customTags)
+        if !normalizedTags.isEmpty {
+            body["tags"] = normalizedTags
+        }
         let trimmedSource = (sourceText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedSource.isEmpty {
             body["source_text"] = trimmedSource
@@ -1549,6 +1586,13 @@ class ShareViewController: SLComposeServiceViewController {
             append("--\(boundary)\r\n")
             append("Content-Disposition: form-data; name=\"title\"\r\n\r\n")
             append("\(titleForImageImport)\r\n")
+        }
+
+        let normalizedTags = Self.normalizeTags(self.customTags)
+        if !normalizedTags.isEmpty {
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"tags\"\r\n\r\n")
+            append("\(normalizedTags)\r\n")
         }
 
         if let sourceURL {
@@ -1846,6 +1890,64 @@ class ShareViewController: SLComposeServiceViewController {
 
 private extension Optional where Wrapped == String {
     var orEmpty: String { self ?? "" }
+}
+
+final class TagsEntryViewController: UIViewController {
+    private let initialText: String
+    private let onDone: (String) -> Void
+    private let textView = UITextView()
+
+    init(initialText: String, onDone: @escaping (String) -> Void) {
+        self.initialText = initialText
+        self.onDone = onDone
+        super.init(nibName: nil, bundle: nil)
+        self.title = "Taggar"
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            title: "Klar",
+            style: .done,
+            target: self,
+            action: #selector(doneTapped)
+        )
+
+        textView.text = initialText
+        textView.font = .preferredFont(forTextStyle: .body)
+        textView.autocapitalizationType = .none
+        textView.autocorrectionType = .yes
+        textView.keyboardType = .default
+        textView.returnKeyType = .done
+        textView.layer.cornerRadius = 10
+        textView.layer.borderWidth = 1
+        textView.layer.borderColor = UIColor.separator.cgColor
+        textView.backgroundColor = .secondarySystemBackground
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(textView)
+
+        NSLayoutConstraint.activate([
+            textView.leadingAnchor.constraint(equalTo: view.layoutMarginsGuide.leadingAnchor),
+            textView.trailingAnchor.constraint(equalTo: view.layoutMarginsGuide.trailingAnchor),
+            textView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            textView.heightAnchor.constraint(greaterThanOrEqualToConstant: 120),
+        ])
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        textView.becomeFirstResponder()
+    }
+
+    @objc private func doneTapped() {
+        onDone(textView.text ?? "")
+    }
 }
 
 final class DishTypeSelectionViewController: UITableViewController {
