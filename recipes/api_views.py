@@ -412,6 +412,9 @@ class RecipeViewSet(OwnedModelViewSet):
                 low = re.sub(r"\(.*?\)", "", l).lower().rstrip(":").strip()
                 if "ingredien" in low or low == "ingredients" or low == "recept":
                     return True
+                # Common ingredient heading variant in Swedish captions.
+                if "du behöver" in low or "du behover" in low:
+                    return True
                 # Accept common variations: "Gör så här", "Gör såhär", "För så här" (typo), "Så här gör du"
                 if any(pattern in low for pattern in ["gör så", "gör sa", "görsåhär", "görsahar", "för så här", "så här gör"]):
                     return True
@@ -436,11 +439,29 @@ class RecipeViewSet(OwnedModelViewSet):
                 
                 # Track first subsection heading (ends with colon, not a major heading)
                 if first_subsection_idx is None and ln.strip().endswith(":"):
-                    if not any(kw in low for kw in ["ingredien", "recept", "gör", "gor", "instruktion", "tillag"]):
+                    if not any(
+                        kw in low
+                        for kw in [
+                            "ingredien",
+                            "recept",
+                            "du behöver",
+                            "du behover",
+                            "gör",
+                            "gor",
+                            "instruktion",
+                            "tillag",
+                        ]
+                    ):
                         first_subsection_idx = i
                 
                 # Accept "Ingredienser", "Ingredients", or "Recept" as ingredient marker
-                if ing_start is None and ("ingredien" in low or low == "ingredients" or low == "recept"):
+                if ing_start is None and (
+                    "ingredien" in low
+                    or low == "ingredients"
+                    or low == "recept"
+                    or "du behöver" in low
+                    or "du behover" in low
+                ):
                     ing_start = i + 1
                     continue
                 # Accept variations: "Gör så här", "För så här", "Gör såhär", "Så här gör du"
@@ -619,7 +640,14 @@ class RecipeViewSet(OwnedModelViewSet):
                     return collected
                 out: list[str] = []
                 for ln in lines[start_idx:]:
-                    if is_heading(ln) and ("ingredien" in ln.lower() or "gör" in ln.lower() or "instruktion" in ln.lower() or "recept" in ln.lower()):
+                    if is_heading(ln) and (
+                        "ingredien" in ln.lower()
+                        or "du behöver" in ln.lower()
+                        or "du behover" in ln.lower()
+                        or "gör" in ln.lower()
+                        or "instruktion" in ln.lower()
+                        or "recept" in ln.lower()
+                    ):
                         # Stop at next major section
                         break
                     if ln.endswith(":") and normalize_heading(ln):
@@ -681,6 +709,49 @@ class RecipeViewSet(OwnedModelViewSet):
             if not ing_lines and not step_lines:
                 return "", "", raw.strip()
 
+            # If we found steps but no explicit ingredient section, try to extract obvious
+            # ingredient lines before the step section (common in Reel captions).
+            if not ing_lines and step_lines:
+                def looks_like_ingredient_line(line: str) -> bool:
+                    s = (line or "").strip().lower()
+                    if not s:
+                        return False
+                    if s.endswith(":") and len(s) <= 30:
+                        return True
+                    if re.match(r"^\s*\d+(?:[\.,]\d+)?\s*(?:g|gr|kg|dl|cl|l|ml|msk|tsk|krm|st|pkt|förp|burk)\b", s):
+                        return True
+                    if re.match(r"^\s*\d+\s*(?:st|stycken)\b", s):
+                        return True
+                    if re.match(r"^\s*\d+\s*(?:-\s*\d+)?\s*(?:tsk|msk)\b", s):
+                        return True
+                    if ("&" in s or " och " in s) and re.search(r"(?i)\b(salt|peppar|vitpeppar|svartpeppar|socker)\b", s):
+                        # Avoid capturing instruction-y sentences.
+                        if looks_like_step_line(s):
+                            return False
+                        return True
+                    return False
+
+                search_span = lines
+                if step_start is not None and step_start > 0:
+                    search_span = lines[:step_start]
+
+                extracted: list[str] = []
+                for ln in search_span:
+                    if not ln or ln.lstrip().startswith("#"):
+                        continue
+                    if is_heading(ln):
+                        continue
+                    s = re.sub(r"^[-•*]+\s*", "", (ln or "").strip()).strip()
+                    if not s:
+                        continue
+                    if is_numbered_step_line(s) or looks_like_step_line(s):
+                        continue
+                    if looks_like_ingredient_line(s):
+                        extracted.append(s)
+
+                if extracted:
+                    ing_lines = extracted
+
             return "\n".join(ing_lines).strip(), "\n".join(step_lines).strip(), ""
 
         def salvage_from_blob(blob: str):
@@ -708,7 +779,7 @@ class RecipeViewSet(OwnedModelViewSet):
                             return i
                 return None
 
-            idx_ing = find_line_index(["ingredienser", "ingredients"])
+            idx_ing = find_line_index(["ingredienser", "ingredients", "du behöver", "du behover"])
             idx_steps = find_line_index(["gör så här", "gor sa har", "instruktioner", "tillagning", "metod", "steg"])
 
             # Title = first line up to 200 chars (later capped).

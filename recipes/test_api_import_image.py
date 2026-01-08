@@ -178,6 +178,67 @@ class ImportImageAPITests(TestCase):
 
 
     @patch("recipes.ocr_service.ImageRecipeParser")
+    def test_import_image_parses_instagram_du_behover_heading(self, mock_parser_cls):
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {"title": "", "description": "", "ingredients": "", "steps": "", "cooking_time": 0, "servings": 4}
+
+        caption = (
+            "Asiatisk biffsallad\n"
+            "Du behöver:\n"
+            "- 1 st lime\n"
+            "- 2 msk soja\n"
+            "Gör så här:\n"
+            "1. Blanda.\n"
+            "2. Servera.\n"
+        )
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "source_url": "https://www.instagram.com/reel/ABC/", "source_text": caption},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertIn("1 st lime", data["ingredients"])
+        self.assertIn("2 msk soja", data["ingredients"])
+        self.assertIn("Blanda.", data["steps"])
+
+
+    @patch("recipes.ocr_service.ImageRecipeParser")
+    def test_import_image_parses_instagram_ingredients_before_steps_without_heading(self, mock_parser_cls):
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {"title": "", "description": "", "ingredients": "", "steps": "", "cooking_time": 0, "servings": 4}
+
+        caption = (
+            "Asiatisk biffsallad\n"
+            "1 st lime\n"
+            "2 msk soja\n"
+            "Gör så här:\n"
+            "Blanda.\n"
+            "Servera.\n"
+        )
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "source_url": "https://www.instagram.com/reel/ABC/", "source_text": caption},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertIn("1 st lime", data["ingredients"])
+        self.assertIn("2 msk soja", data["ingredients"])
+        self.assertIn("Blanda.", data["steps"])
+
+
+    @patch("recipes.ocr_service.ImageRecipeParser")
     def test_import_image_parses_instagram_dressing_sallad_format(self, mock_parser_cls):
         mock_parser = mock_parser_cls.return_value
         mock_parser.parse_image.return_value = {"title": "", "description": "", "ingredients": "", "steps": "", "cooking_time": 0, "servings": 4}
