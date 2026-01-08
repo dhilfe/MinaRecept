@@ -348,6 +348,9 @@ class RecipeViewSet(OwnedModelViewSet):
                     return False
                 if s.startswith("(") and s.endswith(")"):
                     return False
+                # Captions often prefix steps with emojis or arrows (e.g. "👉 Stek ...").
+                # Strip non-letter prefix before verb matching.
+                s = re.sub(r"^[^A-Za-zÅÄÖåäö]+", "", s).strip()
                 # Common Swedish cooking verbs at the beginning of a step.
                 # This is more reliable than length heuristics (ingredients can be long too).
                 return re.match(
@@ -377,6 +380,7 @@ class RecipeViewSet(OwnedModelViewSet):
                 if not m:
                     return False
                 rest = m.group(2).strip()
+                rest = re.sub(r"^[^A-Za-zÅÄÖåäö]+", "", rest).strip()
                 return looks_like_step_line(rest)
 
             def is_heading(line: str) -> bool:

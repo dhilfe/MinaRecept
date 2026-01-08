@@ -557,3 +557,42 @@ Ingredienser:
         self.assertIn("Skär tomaterna", data["steps"])
         self.assertIn("Blanda med olivolja", data["steps"])
 
+
+    @patch("recipes.ocr_service.ImageRecipeParser")
+    def test_import_image_instagram_emoji_prefixed_steps_are_not_added_to_ingredients(self, mock_parser_cls):
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {}
+
+        caption = """
+PANNBIFF I LÖKSÅS
+
+Biffar:
+500 g färs
+1 ägg
+
+Sås:
+2 gula lökar
+2 dl grädde
+
+👉 Stek biffarna i stekpannan.
+➡️ Tillsätt grädde och låt puttra.
+"""
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "source_url": "https://www.instagram.com/reel/EMOJI/", "source_text": caption},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertIn("500 g färs", data["ingredients"])
+        self.assertIn("2 gula lökar", data["ingredients"])
+        self.assertNotIn("Stek biffarna", data["ingredients"])
+        self.assertNotIn("Tillsätt grädde", data["ingredients"])
+        self.assertIn("Stek biffarna", data["steps"])
+        self.assertIn("Tillsätt grädde", data["steps"])
+
