@@ -799,23 +799,60 @@ class RecipeViewSet(OwnedModelViewSet):
                     desc_extra = s_desc
 
             # If the caption parser misclassifies and produces identical content for ingredients and steps,
-            # treat ingredients as missing so OCR fallback can fill it from the image.
+            # do NOT put that text into ingredients. Instead, allow OCR to overwrite ingredients.
             if parsed_ing and parsed_steps:
                 import re
 
                 def _norm(s: str) -> str:
                     return re.sub(r"\s+", " ", (s or "").strip()).lower()
 
+                def _split_lines(block: str) -> list[str]:
+                    return [ln.strip() for ln in (block or "").splitlines() if ln.strip()]
+
+                def _looks_like_ingredient_line(line: str) -> bool:
+                    # Very rough heuristic: quantities/units or common ingredient formats.
+                    s = (line or "").strip().lower()
+                    if not s:
+                        return False
+                    # Skip subsection headings like "Sås:".
+                    if s.endswith(":") and len(s) <= 30:
+                        return True
+                    if re.match(r"^\s*\d+(?:[\.,]\d+)?\s*(?:g|gr|kg|dl|cl|l|ml|msk|tsk|krm|st|pkt|förp|burk)\b", s):
+                        return True
+                    if re.match(r"^\s*\d+\s*(?:st|stycken)\b", s):
+                        return True
+                    if re.match(r"^\s*\d+\s*(?:-\s*\d+)?\s*(?:tsk|msk)\b", s):
+                        return True
+                    # Common patterns like "Salt & peppar" or "Salt och peppar"
+                    if "&" in s or " och " in s:
+                        return True
+                    return False
+
+                def _looks_like_steps_block(block: str) -> bool:
+                    lines = _split_lines(block)
+                    if not lines:
+                        return False
+                    # If most lines start with verbs/emojis+verbs, it's likely steps.
+                    step_like = 0
+                    for ln in lines:
+                        candidate = re.sub(r"^[^A-Za-zÅÄÖåäö]+", "", ln).strip()
+                        if re.match(
+                            r"(?i)^(stek|tillsätt|strö|servera|lägg|häll|ringla|toppa|blanda|vispa|rör|koka|låt|hacka|skär|sätt|forma|smaka|bryn)\b",
+                            candidate,
+                        ):
+                            step_like += 1
+                    return step_like >= max(2, int(len(lines) * 0.6))
+
                 norm_ing = _norm(parsed_ing)
                 norm_steps = _norm(parsed_steps)
-                if len(norm_ing) >= 80 and norm_ing == norm_steps:
+                if (len(norm_ing) >= 80 and norm_ing == norm_steps) or _looks_like_steps_block(parsed_ing):
                     logger.info(
-                        "Instagram caption parse produced identical ingredients/steps; will allow OCR to overwrite ingredients (source_url=%s)",
+                        "Instagram caption parse produced step-like ingredients; keeping ingredients empty and allowing OCR overwrite (source_url=%s)",
                         source_url,
                     )
                     caption_ingredients_duplicate_steps = True
 
-            if parsed_ing:
+            if parsed_ing and not caption_ingredients_duplicate_steps:
                 ingredients = parsed_ing
             if parsed_steps:
                 steps = parsed_steps

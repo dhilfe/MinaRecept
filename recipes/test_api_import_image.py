@@ -348,8 +348,8 @@ class ImportImageAPITests(TestCase):
 
         self.assertEqual(resp.status_code, 201)
         data = resp.json()
-        # Should keep caption-derived ingredients rather than ending up empty.
-        self.assertTrue(data["ingredients"].strip())
+        # Prefer empty ingredients over duplicating steps when OCR cannot find ingredients.
+        self.assertEqual(data["ingredients"].strip(), "")
         self.assertIn("Stek löken", data["steps"])
 
     @patch("recipes.ocr_service.ImageRecipeParser")
