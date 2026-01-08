@@ -9,6 +9,7 @@ struct RecipeDTO: Codable, Identifiable, Hashable {
     let cookingTime: Int?
     let imageURL: URL?
     let dishType: String?
+    let tags: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -19,6 +20,7 @@ struct RecipeDTO: Codable, Identifiable, Hashable {
         case cookingTime = "cooking_time"
         case imageURL = "image_url"
         case dishType = "dish_type"
+        case tags
     }
     
     var dishTypeDisplayName: String {

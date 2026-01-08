@@ -126,6 +126,26 @@ struct RecipeDetailView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            
+            if let tags = recipe.tags, !tags.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Taggar")
+                        .font(.headline)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(tags.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }, id: \.self) { tag in
+                                Text("#" + tag)
+                                    .font(.caption)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Color.blue.opacity(0.1))
+                                    .foregroundColor(.blue)
+                                    .cornerRadius(12)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -133,7 +153,7 @@ struct RecipeDetailView: View {
     private var descriptionSection: some View {
         if let description = recipe.description, !description.isEmpty {
             Section("Beskrivning") {
-                Text(description)
+                    LinkifiedDescriptionText(text: description)
             }
         }
     }
@@ -142,9 +162,15 @@ struct RecipeDetailView: View {
     private var ingredientsSection: some View {
         if !parsedIngredients.isEmpty {
             Section("Ingredienser") {
-                ForEach(parsedIngredients) { ing in
+                let all = parsedIngredients
+                ForEach(Array(all.enumerated()), id: \.element.id) { idx, ing in
                     let text = formatIngredient(ing)
-                    if isHeadingLine(ing: ing, text: text) {
+                    let nextText: String? = {
+                        guard idx + 1 < all.count else { return nil }
+                        return formatIngredient(all[idx + 1])
+                    }()
+
+                    if isHeadingLine(ing: ing, text: text, nextText: nextText) {
                         Text(text.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: ":")) + ":")
                             .font(.headline)
                             .padding(.vertical, 4)
@@ -212,16 +238,11 @@ struct RecipeDetailView: View {
         }
     }
 
-    private func isHeadingLine(ing: IngredientDTO, text: String) -> Bool {
-        // If it ends with ":" we always treat it as a heading.
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(":") { return true }
-        // If it's an unstructured line (no amount/unit) and has no digits, treat as a section heading.
-        let hasAmountOrUnit = !((ing.amount ?? "").isEmpty && (ing.unit ?? "").isEmpty)
-        if hasAmountOrUnit { return false }
-        if text.rangeOfCharacter(from: .decimalDigits) != nil { return false }
-        // Avoid treating very short pantry items as headings
-        if text.count <= 3 { return false }
-        return true
+    private func isHeadingLine(ing: IngredientDTO, text: String, nextText: String?) -> Bool {
+        let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Only treat explicit ":"-suffix lines as headings.
+        // This avoids turning pantry items like "salt" into headings (which shows up as "salt:").
+        return s.hasSuffix(":")
     }
 
     private func isHeadingStep(_ step: String) -> Bool {
@@ -337,6 +358,53 @@ struct RecipeDetailView: View {
             session.triggerReloadRecipes()
         } catch {
             errorMessage = APIError.userFacingMessage(for: error)
+        }
+    }
+
+    private struct LinkifiedDescriptionText: View {
+        let text: String
+
+        var body: some View {
+            let parsed = parseOriginalSource(text)
+            if let originalUrl = parsed.originalUrl {
+                VStack(alignment: .leading, spacing: 8) {
+                    if !parsed.prefixText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(parsed.prefixText.trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                    HStack(spacing: 0) {
+                        Text("Originalreceptet är från ")
+                        Link("www.instagram.com", destination: originalUrl)
+                    }
+                }
+            } else {
+                Text(text)
+            }
+        }
+
+        private func parseOriginalSource(_ text: String) -> (prefixText: String, originalUrl: URL?) {
+            // Backend appends a final line: "Originalreceptet är från <url>"
+            let lines = text.split(whereSeparator: \.isNewline).map { String($0) }
+            guard let lastLine = lines.last else {
+                return (text, nil)
+            }
+            let pattern = "(?i)^\\s*originalreceptet är från\\s+(https?://\\S+)\\s*$"
+            guard let regex = try? NSRegularExpression(pattern: pattern) else {
+                return (text, nil)
+            }
+            let range = NSRange(location: 0, length: (lastLine as NSString).length)
+            guard let match = regex.firstMatch(in: lastLine, range: range), match.numberOfRanges >= 2 else {
+                return (text, nil)
+            }
+            let urlRange = match.range(at: 1)
+            guard let swiftRange = Range(urlRange, in: lastLine) else {
+                return (text, nil)
+            }
+            let urlString = String(lastLine[swiftRange])
+            guard let url = URL(string: urlString) else {
+                return (text, nil)
+            }
+            let prefix = lines.dropLast().joined(separator: "\n")
+            return (prefix, url)
         }
     }
 }

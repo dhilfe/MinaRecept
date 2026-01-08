@@ -169,11 +169,45 @@ class RecipeViewSet(OwnedModelViewSet):
     queryset = Recipe.objects.all().order_by('-updated_at', '-created_at')
     serializer_class = RecipeSerializer
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        # Filter by search query (title, ingredients, tags)
+        search = self.request.query_params.get('search', '').strip()
+        if search:
+            from django.db.models import Q
+            queryset = queryset.filter(
+                Q(title__icontains=search) |
+                Q(ingredients__icontains=search) |
+                Q(tags__icontains=search)
+            )
+        
+        # Filter by specific tags
+        tags = self.request.query_params.get('tags', '').strip()
+        if tags:
+            # Support comma-separated tags: "snabb,enkel"
+            tag_list = [t.strip().lower() for t in tags.split(',') if t.strip()]
+            for tag in tag_list:
+                queryset = queryset.filter(tags__icontains=tag)
+        
+        return queryset
+
     @action(detail=False, methods=['post'], url_path='import')
     def import_from_url(self, request):
         url = (request.data.get('url') or '').strip()
         if not url:
             return Response({'detail': 'Missing url.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        source_text = (request.data.get('source_text') or '').strip()
+
+        if 'instagram.com' in url.lower():
+            has_markers = any(k in source_text.lower() for k in ['ingredien', 'gör så', 'gor sa', 'instructions'])
+            logger.info(
+                "IG import request: url=%s source_text_len=%s has_markers=%s",
+                url,
+                len(source_text),
+                has_markers,
+            )
 
         dish_type = (request.data.get('dish_type') or '').strip()
         # Backwards compatibility: older clients may send "everyday".
@@ -185,7 +219,7 @@ class RecipeViewSet(OwnedModelViewSet):
                 return Response({'detail': 'Invalid dish_type.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            imported = import_recipe_from_url(url)
+            imported = import_recipe_from_url(url, source_text=source_text or None)
         except Exception as e:
             return Response({'detail': f'Import failed: {e}'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -239,6 +273,10 @@ class RecipeViewSet(OwnedModelViewSet):
         source_url = (request.data.get("source_url") or "").strip()
         source_text = (request.data.get("source_text") or "").strip()
 
+        # Performance: for Instagram shares we often already have the full caption (source_text).
+        # In that case OCR is low-signal (thumbnail image) and can add seconds of latency.
+        is_instagram = "instagram.com" in (source_url or "").lower()
+
         def safe_int(value, default: int) -> int:
             """
             Best-effort int conversion for OCR output.
@@ -265,17 +303,18 @@ class RecipeViewSet(OwnedModelViewSet):
                 return default
 
         data: dict = {}
-        try:
-            from .ocr_service import ImageRecipeParser
+        if not (is_instagram and source_text):
+            try:
+                from .ocr_service import ImageRecipeParser
 
-            parser = ImageRecipeParser()
-            parsed = parser.parse_image(image_file)
-            if isinstance(parsed, dict):
-                data = parsed
-        except Exception:
-            # Never fail hard here: Share Extension expects a 201 for good UX.
-            logger.exception("Image import OCR failed (will create placeholder recipe)")
-            data = {}
+                parser = ImageRecipeParser()
+                parsed = parser.parse_image(image_file)
+                if isinstance(parsed, dict):
+                    data = parsed
+            except Exception:
+                # Never fail hard here: Share Extension expects a 201 for good UX.
+                logger.exception("Image import OCR failed (will create placeholder recipe)")
+                data = {}
 
         title = (data.get("title") or "").strip()
         description = (data.get("description") or "").strip()
@@ -284,71 +323,331 @@ class RecipeViewSet(OwnedModelViewSet):
         cooking_time = safe_int(data.get("cooking_time"), default=0)
         servings = safe_int(data.get("servings"), default=4)
 
+        caption_ingredients_duplicate_steps = False
+        caption_ingredients_salvaged = False
+
         def parse_caption_to_recipe(text: str) -> tuple[str, str, str]:
             """
             Best-effort parse for Instagram captions.
             Returns (ingredients, steps, description_extra).
             """
             import re
+            import html
 
-            raw = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+            # Instagram captions may contain HTML entities (e.g. "p&#xe5;", "&#x1f31f;").
+            raw = html.unescape((text or "")).replace("\r\n", "\n").replace("\r", "\n")
+            # Some IG/OG sources may include literal "\n" sequences instead of actual newlines.
+            raw = raw.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
+
             # Remove obvious URLs
-            raw = re.sub(r"https?://\\S+", "", raw)
+            raw = re.sub(r"https?://\S+", "", raw)
             lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
             if not lines:
                 return "", "", ""
+
+            def looks_like_step_line(line: str) -> bool:
+                s = (line or "").strip()
+                if not s:
+                    return False
+                if s.startswith("(") and s.endswith(")"):
+                    return False
+                # Captions often prefix steps with emojis or arrows (e.g. "👉 Stek ...").
+                # Strip non-letter prefix before verb matching.
+                s = re.sub(r"^[^A-Za-zÅÄÖåäö]+", "", s).strip()
+                # Common Swedish cooking verbs at the beginning of a step.
+                # This is more reliable than length heuristics (ingredients can be long too).
+                if re.match(
+                    r"(?i)^(stek\w*|tillsätt\w*|strö\w*|servera\w*|lägg\w*|häll\w*|ringla\w*|toppa\w*|bland\w*|visp\w*|rör\w*|kok\w*|låt\w*|hack\w*|skär\w*|sätt\w*|form\w*|smak\w*|bryn\w*)\b",
+                    s,
+                ) is not None:
+                    return True
+
+                # Also treat long instruction-like sentences as steps even if they don't start with a verb.
+                # This captures patterns like "I en skål blandar du ...".
+                if len(s) >= 60 and (
+                    "." in s
+                    or "!" in s
+                    or "?" in s
+                    or re.search(r"(?i)\b(min|minuter|grader|°c)\b", s)
+                ):
+                    if re.search(
+                        r"(?i)\b(stek\w*|tillsätt\w*|strö\w*|servera\w*|lägg\w*|häll\w*|ringla\w*|toppa\w*|bland\w*|visp\w*|rör\w*|kok\w*|låt\w*|hack\w*|skär\w*|sätt\w*|form\w*|smak\w*|bryn\w*)\b",
+                        s,
+                    ):
+                        return True
+
+                return False
+
+            def is_numbered_step_line(line: str) -> bool:
+                """Detect step lines that start with numbering.
+
+                We accept:
+                - "1." / "1)" styles
+                - "1 <verb> ..." styles (common in captions)
+
+                We deliberately avoid matching ingredient quantities like "1 dl" or ranges like "1-2 tsk".
+                """
+                s = (line or "").strip()
+                if not s:
+                    return False
+
+                # Strong signal: explicit punctuation after the number.
+                if re.match(r"^\s*\d+\s*[.)]\s*\S+", s):
+                    return True
+
+                # Also accept bare "1 <...>" but only if what follows looks like a step (starts with a verb).
+                m = re.match(r"^\s*(\d+)\s+(\S.+)$", s)
+                if not m:
+                    return False
+                rest = m.group(2).strip()
+                rest = re.sub(r"^[^A-Za-zÅÄÖåäö]+", "", rest).strip()
+                return looks_like_step_line(rest)
 
             def is_heading(line: str) -> bool:
                 l = line.strip()
                 if l.endswith(":"):
                     return True
-                # common headings
-                low = l.lower()
-                return low in {"ingredienser", "ingredients", "gör så här", "gor sa har", "instruktioner", "instructions", "tillagning"}
+                # common headings (allow extra punctuation/emojis, e.g. "Ingredienser👇")
+                # Strip parenthetical info like "Gör så här (tar typ 5 minuter)"
+                low = re.sub(r"\(.*?\)", "", l).lower().rstrip(":").strip()
+                if "ingredien" in low or low == "ingredients" or low == "recept":
+                    return True
+                # Common ingredient heading variant in Swedish captions.
+                if "du behöver" in low or "du behover" in low:
+                    return True
+                # Accept common variations: "Gör så här", "Gör såhär", "För så här" (typo), "Så här gör du"
+                if any(pattern in low for pattern in ["gör så", "gör sa", "görsåhär", "görsahar", "för så här", "så här gör"]):
+                    return True
+                if "instruktion" in low or "tillag" in low or low == "instructions":
+                    return True
+                return False
 
             def normalize_heading(line: str) -> str:
-                return line.strip().rstrip(":").strip()
+                # Strip parenthetical info and normalize
+                s = re.sub(r"\(.*?\)", "", line).strip().rstrip(":").strip()
+                return s
 
             # Identify sections
             ing_start = None
             step_start = None
+            numbered_step_idx = None
+            first_subsection_idx = None  # Track first colon-ending line (like "Biffar:" or "Sås:")
+            
             for i, ln in enumerate(lines):
-                low = ln.lower().rstrip(":").strip()
-                if ing_start is None and ("ingredien" in low or low == "ingredients"):
+                # Strip parentheses for comparison
+                low = re.sub(r"\(.*?\)", "", ln).lower().rstrip(":").strip()
+                
+                # Track first subsection heading (ends with colon, not a major heading)
+                if first_subsection_idx is None and ln.strip().endswith(":"):
+                    if not any(
+                        kw in low
+                        for kw in [
+                            "ingredien",
+                            "recept",
+                            "du behöver",
+                            "du behover",
+                            "gör",
+                            "gor",
+                            "instruktion",
+                            "tillag",
+                        ]
+                    ):
+                        first_subsection_idx = i
+                
+                # Accept "Ingredienser", "Ingredients", or "Recept" as ingredient marker
+                if ing_start is None and (
+                    "ingredien" in low
+                    or low == "ingredients"
+                    or low == "recept"
+                    or "du behöver" in low
+                    or "du behover" in low
+                ):
                     ing_start = i + 1
                     continue
-                if step_start is None and ("gör" in low or "gor" in low or "instruktion" in low or low == "instructions" or "tillag" in low):
+                # Accept variations: "Gör så här", "För så här", "Gör såhär", "Så här gör du"
+                if step_start is None and any(pattern in low for pattern in ["gör så", "gör sa", "görsåhär", "görsahar", "för så här", "så här gör"]):
                     step_start = i + 1
                     continue
+                if step_start is None and ("instruktion" in low or low == "instructions" or "tillag" in low):
+                    step_start = i + 1
+                    continue
+                # NOTE: don't treat "1-2 tsk ..." as a step (common ingredient amount).
+                # Accept numbered steps including "1."/"1)" and "1 <verb>".
+                if numbered_step_idx is None and is_numbered_step_line(ln):
+                    numbered_step_idx = i
+            
+            # Fallback: if no explicit ingredient marker but we have subsections (e.g., "Biffar:", "Sås:"),
+            # treat first subsection as start of ingredient section.
+            if ing_start is None and first_subsection_idx is not None:
+                ing_start = first_subsection_idx
 
-            def collect_until_next_heading(start_idx: int | None) -> list[str]:
+            # If no explicit step marker exists but we do have numbered steps, use those.
+            if step_start is None and numbered_step_idx is not None:
+                step_start = numbered_step_idx
+
+            def collect_until_next_heading(start_idx: int | None, is_ingredient_section: bool = False) -> list[str]:
+                """Collect lines until next heading. 
+                
+                If is_ingredient_section=True and we're after a 'Recept' heading, stop when we hit
+                long sentences (likely steps).
+                """
                 if start_idx is None:
                     return []
                 out: list[str] = []
-                for ln in lines[start_idx:]:
+                for i, ln in enumerate(lines[start_idx:], start=start_idx):
                     if is_heading(ln):
                         break
+                    if ln.lstrip().startswith("#"):
+                        # Ignore hashtags.
+                        continue
+                    # Ignore parenthetical notes/tips at line level too.
+                    if ln.strip().startswith("(") and ln.strip().endswith(")"):
+                        continue
+                    
+                    s = ln.strip()
+                    # If this is ingredient section after "Recept:", stop when we hit step-like lines.
+                    if is_ingredient_section and looks_like_step_line(s):
+                        break
+                    
                     # strip bullet markers
-                    s = re.sub(r"^[-•*]+\\s*", "", ln).strip()
+                    s = re.sub(r"^[-•*]+\\s*", "", s).strip()
                     if s:
                         out.append(s)
                 return out
 
-            ing_lines = collect_until_next_heading(ing_start)
+            def normalize_numbered_steps(raw_steps: list[str]) -> list[str]:
+                """Merge continuation lines into the preceding numbered step and strip leading numbers.
+
+                The iOS UI numbers each step itself, so returning "1. ..." would duplicate numbering.
+                """
+                out: list[str] = []
+                current: str = ""
+
+                for ln in raw_steps:
+                    s = ln.strip()
+                    if not s:
+                        continue
+                    if s.startswith("#"):
+                        continue
+                    # Ignore lines that are parenthetical notes/tips (common at end of captions).
+                    if s.startswith("(") and s.endswith(")"):
+                        continue
+
+                    m = re.match(r"^\s*\d+\s*[.)]\s*(\S.+)$", s)
+                    if m:
+                        if current:
+                            out.append(current.strip())
+                        current = m.group(1).strip()
+                        continue
+
+                    m2 = re.match(r"^\s*\d+\s+(\S.+)$", s)
+                    if m2 and looks_like_step_line(m2.group(1)):
+                        if current:
+                            out.append(current.strip())
+                        current = m2.group(1).strip()
+                        continue
+
+                    # Continuation line (belongs to the previous step)
+                    if current:
+                        current = (current + " " + s).strip()
+                    else:
+                        # If we somehow start with a continuation, treat as its own step.
+                        current = s
+
+                if current:
+                    out.append(current.strip())
+
+                return out
+
+            # Check if this is a "Recept:" heading (ingredient marker variation)
+            is_recept_heading = ing_start is not None and ing_start > 0
+            if is_recept_heading:
+                prev_line = lines[ing_start - 1].lower().strip().rstrip(":")
+                is_recept_heading = prev_line == "recept"
+
+            ing_lines = collect_until_next_heading(ing_start, is_ingredient_section=is_recept_heading)
             step_lines = collect_until_next_heading(step_start)
 
-            # If no explicit section markers, keep caption as description only.
-            if not ing_lines and not step_lines:
+            # Filter out parenthetical notes from step_lines before processing.
+            step_lines = [ln for ln in step_lines if not (ln.strip().startswith("(") and ln.strip().endswith(")"))]
+
+            # If steps look like numbered steps, merge continuation lines and strip numbering.
+            if step_lines and any(is_numbered_step_line(ln) for ln in step_lines):
+                step_lines = normalize_numbered_steps(step_lines)
+
+            # Common Reel caption format:
+            # Intro text -> "Dressing:" block -> "Sallad:" block -> numbered steps.
+            # If we have numbered steps but no explicit ingredients marker, treat the content
+            # before the first numbered step as ingredients (preserving subsection headings ending with ":").
+            if not ing_lines and numbered_step_idx is not None and ing_start is None:
+                # Find first subsection heading before steps.
+                ing_block_start = None
+                for i, ln in enumerate(lines[:numbered_step_idx]):
+                    if ln.strip().endswith(":"):
+                        ing_block_start = i
+                        break
+                if ing_block_start is None:
+                    ing_block_start = 1 if numbered_step_idx > 1 else 0
+
+                desc_extra = ""
+                if ing_block_start > 1:
+                    desc_extra = "\n".join(lines[1:ing_block_start]).strip()
+
+                ing_out: list[str] = []
+                for ln in lines[ing_block_start:numbered_step_idx]:
+                    if ln.strip().endswith(":"):
+                        h = normalize_heading(ln)
+                        if h:
+                            ing_out.append(h + ":")
+                        continue
+                    s = re.sub(r"^[-•*]+\s*", "", ln).strip()
+                    if s:
+                        ing_out.append(s)
+
+                # Prefer whatever we already collected for steps (it starts at the numbered lines).
+                step_out = [s for s in step_lines if s and not s.strip().startswith("#")]
+                if step_out and any(is_numbered_step_line(ln) for ln in step_out):
+                    step_out = normalize_numbered_steps(step_out)
+                if not step_out:
+                    raw_step_lines: list[str] = []
+                    for ln in lines[numbered_step_idx:]:
+                        s = ln.strip()
+                        if not s or s.startswith("#"):
+                            continue
+                        raw_step_lines.append(s)
+                    if any(is_numbered_step_line(ln) for ln in raw_step_lines):
+                        step_out = normalize_numbered_steps(raw_step_lines)
+                    else:
+                        step_out = raw_step_lines
+
+                if ing_out or step_out or desc_extra:
+                    return "\n".join(ing_out).strip(), "\n".join(step_out).strip(), desc_extra
+
+            # If we truly have no markers at all, keep caption as description only.
+            # (Important: don't early-return just because the initial collectors returned empty;
+            # add_headings() may still recover ingredients from subsection headings like "Biffar:".)
+            if ing_start is None and step_start is None and numbered_step_idx is None:
                 return "", "", raw.strip()
 
             # Preserve headings like "Dressing:" by converting to a plain heading line.
             # We'll add them if we see lines ending with ":" in the relevant span.
             def add_headings(start_idx: int | None, collected: list[str]) -> list[str]:
+                """Process lines starting from start_idx, preserving subsection headings.
+
+                Stop when hitting long sentences (likely steps) if we're in ingredient section.
+                """
                 if start_idx is None:
                     return collected
                 out: list[str] = []
                 for ln in lines[start_idx:]:
-                    if is_heading(ln) and ("ingredien" in ln.lower() or "gör" in ln.lower() or "instruktion" in ln.lower()):
+                    if is_heading(ln) and (
+                        "ingredien" in ln.lower()
+                        or "du behöver" in ln.lower()
+                        or "du behover" in ln.lower()
+                        or "gör" in ln.lower()
+                        or "instruktion" in ln.lower()
+                        or "recept" in ln.lower()
+                    ):
                         # Stop at next major section
                         break
                     if ln.endswith(":") and normalize_heading(ln):
@@ -356,16 +655,104 @@ class RecipeViewSet(OwnedModelViewSet):
                         continue
                     if is_heading(ln):
                         break
-                    s = re.sub(r"^[-•*]+\\s*", "", ln).strip()
+
+                    # If we hit numbered steps (common when the caption has no explicit "Gör så här" heading),
+                    # stop collecting ingredients so steps don't end up duplicated under Ingredienser.
+                    if is_numbered_step_line(ln):
+                        break
+
+                    s = ln.strip()
+                    # Stop if we hit a step-like line (likely a step, not ingredient)
+                    if looks_like_step_line(s):
+                        break
+
+                    s = re.sub(r"^[-•*]+\\s*", "", s).strip()
                     if s:
                         out.append(s)
                 # fallback to original collected if we got nothing
                 return out or collected
 
             ing_lines = add_headings(ing_start, ing_lines)
-            step_lines = add_headings(step_start, step_lines)
+            # Don't re-process step_lines with add_headings as we've already filtered/normalized them.
+            # step_lines = add_headings(step_start, step_lines)
 
-            return "\\n".join(ing_lines).strip(), "\\n".join(step_lines).strip(), ""
+            # After add_headings processes ingredients and stops at long sentences,
+            # collect those long sentences as steps if we don't have explicit steps yet.
+            if ing_lines and not step_lines and ing_start is not None:
+                # Find where add_headings stopped (first long sentence after ing_start)
+                step_start_idx = None
+                for i, ln in enumerate(lines[ing_start:], start=ing_start):
+                    if is_heading(ln) and any(kw in ln.lower() for kw in ["ingredien", "gör", "instruktion", "recept"]):
+                        break
+                    # Skip subsection headings
+                    if ln.strip().endswith(":"):
+                        continue
+                    s = ln.strip()
+                    if looks_like_step_line(s):
+                        step_start_idx = i
+                        break
+
+                if step_start_idx is not None:
+                    potential_steps = []
+                    for ln in lines[step_start_idx:]:
+                        s = ln.strip()
+                        if not s or s.startswith("#"):
+                            continue
+                        if s.startswith("(") and s.endswith(")"):
+                            continue
+                        potential_steps.append(s)
+
+                    if potential_steps:
+                        step_lines = potential_steps
+
+            # If we still couldn't extract any structure, keep caption as description only.
+            if not ing_lines and not step_lines:
+                return "", "", raw.strip()
+
+            # If we found steps but no explicit ingredient section, try to extract obvious
+            # ingredient lines before the step section (common in Reel captions).
+            if not ing_lines and step_lines:
+                def looks_like_ingredient_line(line: str) -> bool:
+                    s = (line or "").strip().lower()
+                    if not s:
+                        return False
+                    if s.endswith(":") and len(s) <= 30:
+                        return True
+                    if re.match(r"^\s*\d+(?:[\.,]\d+)?\s*(?:g|gr|kg|dl|cl|l|ml|msk|tsk|krm|st|pkt|förp|burk)\b", s):
+                        return True
+                    if re.match(r"^\s*\d+\s*(?:st|stycken)\b", s):
+                        return True
+                    if re.match(r"^\s*\d+\s*(?:-\s*\d+)?\s*(?:tsk|msk)\b", s):
+                        return True
+                    if ("&" in s or " och " in s) and re.search(r"(?i)\b(salt|peppar|vitpeppar|svartpeppar|socker)\b", s):
+                        # Avoid capturing instruction-y sentences.
+                        if looks_like_step_line(s):
+                            return False
+                        return True
+                    return False
+
+                search_span = lines
+                if step_start is not None and step_start > 0:
+                    search_span = lines[:step_start]
+
+                extracted: list[str] = []
+                for ln in search_span:
+                    if not ln or ln.lstrip().startswith("#"):
+                        continue
+                    if is_heading(ln):
+                        continue
+                    s = re.sub(r"^[-•*]+\s*", "", (ln or "").strip()).strip()
+                    if not s:
+                        continue
+                    if is_numbered_step_line(s) or looks_like_step_line(s):
+                        continue
+                    if looks_like_ingredient_line(s):
+                        extracted.append(s)
+
+                if extracted:
+                    ing_lines = extracted
+
+            return "\n".join(ing_lines).strip(), "\n".join(step_lines).strip(), ""
 
         def salvage_from_blob(blob: str):
             """
@@ -392,7 +779,7 @@ class RecipeViewSet(OwnedModelViewSet):
                             return i
                 return None
 
-            idx_ing = find_line_index(["ingredienser", "ingredients"])
+            idx_ing = find_line_index(["ingredienser", "ingredients", "du behöver", "du behover"])
             idx_steps = find_line_index(["gör så här", "gor sa har", "instruktioner", "tillagning", "metod", "steg"])
 
             # Title = first line up to 200 chars (later capped).
@@ -414,7 +801,7 @@ class RecipeViewSet(OwnedModelViewSet):
 
             # If still missing, try heuristic step lines like "1." / "1)"
             if not salv_steps:
-                step_lines = [ln for ln in lines if re.match(r"^\s*\d+\s*[.)-]\s*\S+", ln)]
+                step_lines = [ln for ln in lines if re.match(r"^\s*\d+\s*[.)]\s*\S+", ln)]
                 if step_lines:
                     salv_steps = "\n".join(step_lines).strip()
 
@@ -445,8 +832,168 @@ class RecipeViewSet(OwnedModelViewSet):
                 if s_steps and not steps:
                     steps = s_steps
 
-        # Instagram caption fallback: if we received source_text, try parsing it.
-        if source_text and (not ingredients or not steps):
+        # Instagram caption fallback:
+        # If source_url is Instagram and we have source_text, prefer it over OCR output.
+        # This avoids the common case where OCR returns mock/placeholder ingredients/steps
+        # (e.g. when OPENAI_API_KEY is missing) and blocks caption parsing.
+        if source_text and is_instagram:
+            parsed_ing, parsed_steps, desc_extra = parse_caption_to_recipe(source_text)
+
+            # For Instagram thumbnail imports, OCR output is often low-signal (it's not a recipe screenshot).
+            # Prefer a caption-derived title unless the client explicitly provided one.
+            if not provided_title:
+                import re
+                import html
+
+                def guess_instagram_title(caption: str) -> str:
+                    t = html.unescape((caption or "")).replace("\r\n", "\n").strip()
+                    if not t:
+                        return ""
+
+                    # Strip instagram og:description prefix: "username Month DD, YYYY: \"...\""
+                    t = re.sub(r"^\S+\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}:\s*\"?", "", t).strip()
+                    t = t.strip('"')
+                    t = re.sub(r"\"\.?$", "", t).strip()
+
+                    # Remove URLs to avoid polluting the title.
+                    t = re.sub(r"https?://\S+", "", t).strip()
+
+                    # First try: extract after "recept ... på (en/ett) ..." up to punctuation.
+                    m = re.search(r"(?i)\brecept\b[^\n.!?]*?\bpå\b\s*(?:en|ett)?\s*([^\n.!?\"]+)", t)
+                    if m:
+                        candidate = m.group(1).strip()
+                        # Drop common filler words at the beginning.
+                        filler = {"en", "ett", "helt", "underbar", "magisk", "super", "supersmarrig", "supersmarrigt", "himla"}
+                        words = [w for w in re.split(r"\s+", candidate) if w]
+                        while words and words[0].lower() in filler:
+                            words.pop(0)
+                        candidate = " ".join(words).strip()
+                        return candidate
+
+                    # Fallback: first non-empty line, trimmed.
+                    return t.split("\n", 1)[0].strip()
+
+                title_candidate = guess_instagram_title(source_text)
+                if title_candidate:
+                    title = title_candidate
+
+            # If the heading-based parser failed, fall back to the same salvage logic we use for OCR blobs.
+            if not parsed_ing and not parsed_steps:
+                s_title, s_desc, s_ing, s_steps = salvage_from_blob(source_text)
+                if s_ing:
+                    parsed_ing = s_ing
+                if s_steps:
+                    parsed_steps = s_steps
+                if s_desc and not desc_extra:
+                    desc_extra = s_desc
+
+            # If the caption parser misclassifies and produces identical content for ingredients and steps,
+            # do NOT put step text into ingredients. Instead, allow OCR to overwrite ingredients.
+            # If the parsed ingredient block contains a mix of ingredients + steps, try to salvage
+            # ingredient-like lines rather than discarding everything.
+            if parsed_ing and parsed_steps:
+                import re
+
+                def _norm(s: str) -> str:
+                    return re.sub(r"\s+", " ", (s or "").strip()).lower()
+
+                def _split_lines(block: str) -> list[str]:
+                    return [ln.strip() for ln in (block or "").splitlines() if ln.strip()]
+
+                def _looks_like_ingredient_line(line: str) -> bool:
+                    # Very rough heuristic: quantities/units or common ingredient formats.
+                    s = (line or "").strip().lower()
+                    if not s:
+                        return False
+                    # Skip subsection headings like "Sås:".
+                    if s.endswith(":") and len(s) <= 30:
+                        return True
+                    if re.match(r"^\s*\d+(?:[\.,]\d+)?\s*(?:g|gr|kg|dl|cl|l|ml|msk|tsk|krm|st|pkt|förp|burk)\b", s):
+                        return True
+                    if re.match(r"^\s*\d+\s*(?:st|stycken)\b", s):
+                        return True
+                    if re.match(r"^\s*\d+\s*(?:-\s*\d+)?\s*(?:tsk|msk)\b", s):
+                        return True
+                    # Common patterns like "salt & peppar" / "salt och peppar".
+                    if ("&" in s or " och " in s) and re.search(r"(?i)\b(salt|peppar|vitpeppar|svartpeppar|socker)\b", s):
+                        if re.search(
+                            r"(?i)\b(stek\w*|tillsätt\w*|strö\w*|servera\w*|lägg\w*|häll\w*|ringla\w*|toppa\w*|bland\w*|visp\w*|rör\w*|kok\w*|låt\w*|hack\w*|skär\w*|sätt\w*|form\w*|smak\w*|bryn\w*)\b",
+                            s,
+                        ):
+                            return False
+                        return True
+                    return False
+
+                def _looks_like_steps_block(block: str) -> bool:
+                    lines = _split_lines(block)
+                    if not lines:
+                        return False
+                    # If most lines start with verbs/emojis+verbs, it's likely steps.
+                    step_like = 0
+                    for ln in lines:
+                        candidate = re.sub(r"^[^A-Za-zÅÄÖåäö]+", "", ln).strip()
+                        if re.match(
+                            r"(?i)^(stek\w*|tillsätt\w*|strö\w*|servera\w*|lägg\w*|häll\w*|ringla\w*|toppa\w*|bland\w*|visp\w*|rör\w*|kok\w*|låt\w*|hack\w*|skär\w*|sätt\w*|form\w*|smak\w*|bryn\w*)\b",
+                            candidate,
+                        ):
+                            step_like += 1
+                    return step_like >= max(2, int(len(lines) * 0.6))
+
+                def _looks_like_step_line(line: str) -> bool:
+                    s = (line or "").strip()
+                    if not s:
+                        return False
+                    if s.startswith("(") and s.endswith(")"):
+                        return False
+                    s = re.sub(r"^[^A-Za-zÅÄÖåäö]+", "", s).strip()
+                    return (
+                        re.match(
+                            r"(?i)^(stek\w*|tillsätt\w*|strö\w*|servera\w*|lägg\w*|häll\w*|ringla\w*|toppa\w*|bland\w*|visp\w*|rör\w*|kok\w*|låt\w*|hack\w*|skär\w*|sätt\w*|form\w*|smak\w*|bryn\w*)\b",
+                            s,
+                        )
+                        is not None
+                    )
+
+                norm_ing = _norm(parsed_ing)
+                norm_steps = _norm(parsed_steps)
+                step_like_ing = (len(norm_ing) >= 80 and norm_ing == norm_steps) or _looks_like_steps_block(parsed_ing)
+                if step_like_ing:
+                    ing_lines = _split_lines(parsed_ing)
+                    filtered_lines: list[str] = []
+                    for ln in ing_lines:
+                        # Preserve subsection headings and obvious ingredient lines.
+                        if _looks_like_ingredient_line(ln):
+                            filtered_lines.append(ln)
+                            continue
+                        # Keep short non-step lines (sometimes ingredients have no units).
+                        if len(ln) <= 40 and not _looks_like_step_line(ln):
+                            filtered_lines.append(ln)
+
+                    salvaged = "\n".join(filtered_lines).strip()
+                    if salvaged:
+                        logger.info(
+                            "Instagram caption parse produced step-like ingredients; salvaged %s ingredient lines (source_url=%s)",
+                            len(filtered_lines),
+                            source_url,
+                        )
+                        parsed_ing = salvaged
+                        caption_ingredients_salvaged = True
+                    else:
+                        logger.info(
+                            "Instagram caption parse produced step-like ingredients; no ingredient lines to salvage (source_url=%s)",
+                            source_url,
+                        )
+                        parsed_ing = ""
+
+                    caption_ingredients_duplicate_steps = True
+
+            if parsed_ing and (not caption_ingredients_duplicate_steps or caption_ingredients_salvaged):
+                ingredients = parsed_ing
+            if parsed_steps:
+                steps = parsed_steps
+            if desc_extra and not description:
+                description = desc_extra
+        elif source_text and (not ingredients or not steps):
             parsed_ing, parsed_steps, desc_extra = parse_caption_to_recipe(source_text)
             if parsed_ing and not ingredients:
                 ingredients = parsed_ing
@@ -454,6 +1001,52 @@ class RecipeViewSet(OwnedModelViewSet):
                 steps = parsed_steps
             if desc_extra and not description:
                 description = desc_extra
+
+        # Instagram + caption optimization can leave us with missing sections
+        # when the caption doesn't include ingredients/steps but the uploaded image does.
+        # Only attempt OCR fallback if an API key is configured (avoid mock data).
+        if is_instagram and source_text and (
+            (not ingredients or not steps) or caption_ingredients_duplicate_steps
+        ):
+            try:
+                from .ocr_service import ImageRecipeParser
+
+                parser = ImageRecipeParser()
+                if not getattr(parser, "api_key", None):
+                    logger.info(
+                        "Instagram image import OCR fallback skipped (OPENAI_API_KEY missing; source_url=%s)",
+                        source_url,
+                    )
+                else:
+                    logger.info(
+                        "Instagram image import OCR fallback start (source_url=%s need_ingredients=%s need_steps=%s)",
+                        source_url,
+                        bool((not ingredients) or caption_ingredients_duplicate_steps),
+                        bool(not steps),
+                    )
+                    try:
+                        image_file.seek(0)
+                    except Exception:
+                        pass
+                    parsed = parser.parse_image(image_file)
+                    if isinstance(parsed, dict):
+                        ocr_ingredients = (parsed.get("ingredients") or "").strip()
+                        ocr_steps = (parsed.get("steps") or "").strip()
+                        # Fill only missing fields; keep caption-derived content when present.
+                        if ocr_ingredients and (
+                            (not ingredients) or caption_ingredients_duplicate_steps
+                        ):
+                            ingredients = ocr_ingredients
+                        if ocr_steps and not steps:
+                            steps = ocr_steps
+                        logger.info(
+                            "Instagram image import OCR fallback done (source_url=%s filled_ingredients=%s filled_steps=%s)",
+                            source_url,
+                            bool(ocr_ingredients and ingredients),
+                            bool(ocr_steps and steps),
+                        )
+            except Exception:
+                logger.exception("Instagram image import OCR fallback failed (non-fatal)")
 
         # Append source URL line for traceability (requested UX).
         if source_url:
@@ -479,11 +1072,24 @@ class RecipeViewSet(OwnedModelViewSet):
 
         # Cap title to model constraint to avoid 500s from DB truncation.
         title = (title or "").strip()[:200]
+        if title:
+            title = title[:1].upper() + title[1:]
         if provided_title and not title:
             title = provided_title.strip()[:200]
         if not title and source_text:
             first = source_text.splitlines()[0].strip()
             title = first[:200]
+
+        # Extract hashtags from source_text (Instagram captions) and save as tags.
+        extracted_tags = ""
+        if source_text:
+            import re
+            hashtag_pattern = r"#(\w+)"
+            hashtags = re.findall(hashtag_pattern, source_text)
+            if hashtags:
+                # Deduplicate and clean: lowercase, unique.
+                unique_tags = list(dict.fromkeys([tag.lower() for tag in hashtags]))
+                extracted_tags = ", ".join(unique_tags)
 
         recipe = Recipe.objects.create(
             user=request.user,
@@ -494,6 +1100,7 @@ class RecipeViewSet(OwnedModelViewSet):
             cooking_time=max(1, cooking_time) if cooking_time else 30,
             servings=max(1, servings) if servings else 4,
             dish_type=dish_type or Recipe._meta.get_field("dish_type").default,
+            tags=extracted_tags,
         )
 
         # Best-effort: save the uploaded image on the recipe as well.

@@ -2,33 +2,74 @@ import os
 import base64
 import json
 import re
+import logging
+from io import BytesIO
 from django.conf import settings
 from openai import OpenAI
 
+logger = logging.getLogger(__name__)
+
 class ImageRecipeParser:
     def __init__(self):
-        self.api_key = os.environ.get('OPENAI_API_KEY')
+        # Support both env var names (some deployments use OPEN_API_KEY).
+        self.api_key = os.environ.get('OPENAI_API_KEY') or os.environ.get('OPEN_API_KEY')
         self.client = None
         if self.api_key:
             self.client = OpenAI(api_key=self.api_key)
 
     def parse_image(self, image_file):
-        """
-        Parses a recipe image and returns a dict with title, ingredients, steps.
-        """
-        if not self.api_key:
-            return self._mock_parse()
-
         try:
-            # Best-effort: preserve original content type if available (png is often better for text).
+            # Read bytes once and detect actual format (content_type can be wrong/missing).
+            try:
+                image_file.seek(0)
+            except Exception:
+                pass
+            raw_bytes = image_file.read()
             content_type = getattr(image_file, "content_type", "") or ""
-            if "png" in content_type.lower():
-                mime = "image/png"
-            else:
-                mime = "image/jpeg"
+
+            def detect_mime(data: bytes) -> tuple[str, str]:
+                if not data:
+                    return "application/octet-stream", "empty"
+                if data.startswith(b"\x89PNG\r\n\x1a\n"):
+                    return "image/png", "png"
+                if data.startswith(b"\xff\xd8\xff"):
+                    return "image/jpeg", "jpeg"
+                if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+                    return "image/gif", "gif"
+                if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WEBP":
+                    return "image/webp", "webp"
+                # HEIC/HEIF often contains ftyp brand markers.
+                if b"ftypheic" in data[:32] or b"ftypheif" in data[:32] or b"ftypmif1" in data[:32]:
+                    return "image/heic", "heic"
+                return "application/octet-stream", "unknown"
+
+            detected_mime, detected_format = detect_mime(raw_bytes)
+            logger.info(
+                "OCR input diagnostics: content_type=%s detected_format=%s size_bytes=%s",
+                content_type or "(missing)",
+                detected_format,
+                len(raw_bytes) if raw_bytes is not None else 0,
+            )
+
+            # If we got an unknown/unsupported type but Pillow can load it, convert to PNG.
+            data_for_model = raw_bytes
+            mime = detected_mime
+            if detected_format in {"unknown", "empty"} and raw_bytes:
+                try:
+                    from PIL import Image
+
+                    img = Image.open(BytesIO(raw_bytes))
+                    out = BytesIO()
+                    img.save(out, format="PNG")
+                    data_for_model = out.getvalue()
+                    mime = "image/png"
+                    logger.info("OCR input converted to PNG via Pillow (orig_content_type=%s)", content_type or "(missing)")
+                except Exception:
+                    # Keep original bytes; OpenAI might still accept.
+                    pass
 
             # Encode image to base64
-            base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+            base64_image = base64.b64encode(data_for_model).decode("utf-8")
             
             response = self.client.chat.completions.create(
                 model="gpt-4o",
@@ -100,7 +141,7 @@ class ImageRecipeParser:
             }
             
         except Exception as e:
-            print(f"OpenAI Error: {e}")
+            logger.warning("OpenAI OCR error: %s", e)
             # Fallback to mock or error
             return {
                 'title': 'Kunde inte tolka bild',

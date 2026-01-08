@@ -542,6 +542,466 @@ class ApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_instagram_uses_og_and_parses_caption(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        html = """
+        <html>
+        <head>
+            <title>Instagram</title>
+            <meta property="og:title" content="TestUser on Instagram: &quot;Asiatisk biffsallad&quot;" />
+            <meta property="og:description" content="TestUser on Instagram: &quot;Asiatisk biffsallad\n\nIngredienser:\n- 1 ägg\n- 2 dl mjöl\n\nGör så här:\n1. Blanda\n2. Stek&quot;" />
+            <meta property="og:image" content="https://example.com/thumb.jpg" />
+        </head>
+        <body></body>
+        </html>
+        """
+        mock_response.content = html.encode('utf-8')
+        mock_get.return_value = mock_response
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {
+                'url': 'https://www.instagram.com/reel/ABC/',
+                'dish_type': 'dessert',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['title'], 'Asiatisk biffsallad')
+
+        recipe_id = response.data['id']
+        created = Recipe.objects.get(id=recipe_id)
+        self.assertIn('1 ägg', created.ingredients)
+        self.assertIn('2 dl mjöl', created.ingredients)
+        self.assertIn('Blanda', created.steps)
+        self.assertIn('Stek', created.steps)
+        self.assertIn('Originalreceptet är från https://www.instagram.com/reel/ABC/', created.description)
+        self.assertEqual(created.image_url, 'https://example.com/thumb.jpg')
+
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_instagram_strips_query_params(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        html = """
+        <html>
+        <head>
+            <title>Instagram</title>
+            <meta property="og:title" content="TestUser on Instagram: &quot;Snabb nudelsallad&quot;" />
+            <meta property="og:description" content="TestUser on Instagram: &quot;Snabb nudelsallad\n\nIngredienser:\n- nudlar\n- soja\n\nGör så här:\n1. Koka\n2. Blanda&quot;" />
+            <meta property="og:image" content="https://example.com/thumb2.jpg" />
+        </head>
+        <body></body>
+        </html>
+        """
+        mock_response.content = html.encode('utf-8')
+        # Simulate requests returning the canonical URL (without query) after fetch.
+        mock_response.url = 'https://www.instagram.com/reel/DLQXLAUugPn/'
+        mock_get.return_value = mock_response
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {
+                'url': 'https://www.instagram.com/reel/DLQXLAUugPn/?igsh=ZmF3YzV1YjU4M3l1',
+                'dish_type': 'dessert',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+
+        recipe_id = response.data['id']
+        created = Recipe.objects.get(id=recipe_id)
+        self.assertEqual(created.title, 'Snabb nudelsallad')
+        self.assertIn('nudlar', created.ingredients)
+        self.assertIn('Blanda', created.steps)
+        # Source line should use canonical URL (no igsh query)
+        self.assertIn('Originalreceptet är från https://www.instagram.com/reel/DLQXLAUugPn/', created.description)
+
+    @patch('recipes.ocr_service.ImageRecipeParser')
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_instagram_ocr_fallback_when_caption_has_no_ingredients(self, mock_get, mock_parser_cls):
+        page_resp = MagicMock()
+        page_resp.raise_for_status.return_value = None
+        html = """
+        <html>
+        <head>
+            <title>Instagram</title>
+            <meta property="og:title" content="TestUser on Instagram: &quot;Biffar med löksås&quot;" />
+            <meta property="og:description" content="TestUser on Instagram: &quot;Biffar med löksås\n\nStek biffarna tills de är genomstekta.\nTillsätt buljong och vatten.\nServera.&quot;" />
+            <meta property="og:image" content="https://example.com/recipeframe.png" />
+        </head>
+        <body></body>
+        </html>
+        """
+        page_resp.content = html.encode('utf-8')
+
+        img_resp = MagicMock()
+        img_resp.raise_for_status.return_value = None
+        img_resp.content = b'fake png bytes'
+        img_resp.headers = {'Content-Type': 'image/png'}
+
+        mock_get.side_effect = [page_resp, img_resp]
+
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.api_key = 'test-key'
+        mock_parser.parse_image.return_value = {
+            'title': '',
+            'description': '',
+            'ingredients': '1 kg blandfärs\n1 gul lök',
+            'steps': '',
+            'cooking_time': 0,
+            'servings': 4,
+        }
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {
+                'url': 'https://www.instagram.com/reel/ABC/',
+                'dish_type': 'dessert',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+        created = Recipe.objects.get(id=response.data['id'])
+        self.assertIn('blandfärs', created.ingredients.lower())
+        self.assertIn('gul lök', created.ingredients.lower())
+        self.assertNotIn('igsh=', created.description)
+
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_instagram_oembed_fallback_parses_caption(self, mock_get):
+        """If Instagram HTML has no OG/caption, fall back to oEmbed for title/thumb/caption."""
+        page_resp = MagicMock()
+        page_resp.raise_for_status.return_value = None
+        page_resp.content = b"<html><head><title>Instagram</title></head><body>Login</body></html>"
+
+        oembed_resp = MagicMock()
+        oembed_resp.status_code = 200
+        oembed_resp.headers = {'Content-Type': 'application/json'}
+        oembed_resp.raise_for_status.return_value = None
+        oembed_resp.text = '{}'
+        oembed_resp.json.return_value = {
+            'title': 'Pasta på 10 minuter – ingredienser och gör så här i caption',
+            'thumbnail_url': 'https://cdn.example.com/thumb.jpg',
+            'author_name': 'somechef',
+            'html': (
+                '<blockquote>'
+                '<p>Ingredienser:\n- pasta\n- grädde\n\nGör så här:\n1. Koka\n2. Blanda</p>'
+                '</blockquote>'
+            ),
+        }
+
+        mock_get.side_effect = [page_resp, oembed_resp]
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {
+                'url': 'https://www.instagram.com/reel/OEMBED123/',
+                'dish_type': 'dessert',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+
+        recipe_id = response.data['id']
+        created = Recipe.objects.get(id=recipe_id)
+        self.assertNotEqual(created.title.lower(), 'importerad länk')
+        self.assertIn('Originalreceptet är från https://www.instagram.com/reel/OEMBED123/', created.description)
+        self.assertEqual(created.image_url, 'https://cdn.example.com/thumb.jpg')
+        self.assertIn('pasta', created.ingredients)
+        self.assertIn('grädde', created.ingredients)
+        self.assertIn('Koka', created.steps)
+        self.assertIn('Blanda', created.steps)
+
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_instagram_embed_fallback_when_oembed_blocked(self, mock_get):
+        # 1) Main page HTML has no OG/caption
+        page_resp = MagicMock()
+        page_resp.raise_for_status.return_value = None
+        page_resp.content = b"<html><head><title>Instagram</title></head><body>Login</body></html>"
+        page_resp.url = 'https://www.instagram.com/reel/DLQXLAUugPn/'
+
+        # 2) oEmbed attempts return 403
+        oembed_403_a = MagicMock()
+        oembed_403_a.status_code = 403
+        oembed_403_a.text = 'Forbidden'
+        oembed_403_a.raise_for_status.side_effect = Exception('HTTP 403')
+
+        oembed_403_b = MagicMock()
+        oembed_403_b.status_code = 403
+        oembed_403_b.text = 'Forbidden'
+        oembed_403_b.raise_for_status.side_effect = Exception('HTTP 403')
+
+        # 3) Embed page provides OG tags with caption
+        embed_html = """
+        <html><head>
+            <meta property="og:title" content="TestUser on Instagram: &quot;Kycklingwraps&quot;" />
+            <meta property="og:description" content="TestUser on Instagram: &quot;Kycklingwraps\n\nIngredienser:\n- kyckling\n- tortilla\n\nGör så här:\n1. Stek\n2. Rulla&quot;" />
+            <meta property="og:image" content="https://example.com/embedthumb.jpg" />
+        </head><body></body></html>
+        """
+        embed_resp = MagicMock()
+        embed_resp.status_code = 200
+        embed_resp.content = embed_html.encode('utf-8')
+
+        # Order of calls:
+        # - fetch_html(main)
+        # - oembed candidate 1
+        # - oembed candidate 2
+        # - embed fetch
+        mock_get.side_effect = [page_resp, oembed_403_a, oembed_403_b, embed_resp]
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {
+                'url': 'https://www.instagram.com/reel/DLQXLAUugPn/?igsh=ZmF3YzV1YjU4M3l1',
+                'dish_type': 'dessert',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+
+        recipe_id = response.data['id']
+        created = Recipe.objects.get(id=recipe_id)
+        self.assertEqual(created.title, 'Kycklingwraps')
+        self.assertIn('kyckling', created.ingredients)
+        self.assertIn('Rulla', created.steps)
+
+    @patch.dict('os.environ', {'INSTAGRAM_COOKIES': 'sessionid=fake; csrftoken=csrf; ds_user_id=123'}, clear=False)
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_instagram_embed_authenticated_retry(self, mock_get):
+        # 1) Main page HTML has no OG/caption
+        page_resp = MagicMock()
+        page_resp.raise_for_status.return_value = None
+        page_resp.content = b"<html><head><title>Instagram</title></head><body>Login</body></html>"
+        page_resp.url = 'https://www.instagram.com/reel/DLQXLAUugPn/'
+
+        # 2) oEmbed attempts return non-JSON HTML
+        oembed_html_a = MagicMock()
+        oembed_html_a.status_code = 200
+        oembed_html_a.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        oembed_html_a.text = '<!DOCTYPE html><html>challenge</html>'
+        oembed_html_a.raise_for_status.return_value = None
+
+        oembed_html_b = MagicMock()
+        oembed_html_b.status_code = 200
+        oembed_html_b.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        oembed_html_b.text = '<!DOCTYPE html><html>challenge</html>'
+        oembed_html_b.raise_for_status.return_value = None
+
+        # 3) Public embed is a shell with no OG/caption
+        embed_shell = MagicMock()
+        embed_shell.status_code = 200
+        embed_shell.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        embed_shell.text = '<!DOCTYPE html><html><head></head><body></body></html>'
+        embed_shell.content = embed_shell.text.encode('utf-8')
+
+        # 4) Authenticated embed returns OG tags with caption
+        embed_auth_html = """
+        <html><head>
+            <meta property="og:title" content="TestUser on Instagram: &quot;IL Kycklingwraps&quot;" />
+            <meta property="og:description" content="TestUser on Instagram: &quot;IL Kycklingwraps\n\nIngredienser:\n- kyckling\n\nGör så här:\n1. Stek\n2. Rulla&quot;" />
+            <meta property="og:image" content="https://example.com/authembedthumb.jpg" />
+        </head><body></body></html>
+        """
+        embed_auth_resp = MagicMock()
+        embed_auth_resp.status_code = 200
+        embed_auth_resp.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        embed_auth_resp.content = embed_auth_html.encode('utf-8')
+
+        # Call order (minimum):
+        # - fetch_html(main)
+        # - oembed candidate 1
+        # - oembed candidate 2
+        # - embed public
+        # - embed authenticated retry
+        mock_get.side_effect = [page_resp, oembed_html_a, oembed_html_b, embed_shell, embed_auth_resp]
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {
+                'url': 'https://www.instagram.com/reel/DLQXLAUugPn/?igsh=ZmF3YzV1YjU4M3l1',
+                'dish_type': 'dessert',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+
+        created = Recipe.objects.get(id=response.data['id'])
+        self.assertEqual(created.title, 'IL Kycklingwraps')
+        self.assertIn('kyckling', created.ingredients)
+        self.assertIn('Rulla', created.steps)
+        self.assertEqual(created.image_url, 'https://example.com/authembedthumb.jpg')
+
+    @patch.dict('os.environ', {'INSTAGRAM_SESSIONID': 'fake-session'}, clear=False)
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_instagram_auth_json_fallback_when_public_blocked(self, mock_get):
+        # 1) Main page HTML is login/JS shell
+        page_resp = MagicMock()
+        page_resp.raise_for_status.return_value = None
+        page_resp.content = b"<html><head><title>Instagram</title></head><body>Login</body></html>"
+        page_resp.url = 'https://www.instagram.com/reel/DLQXLAUugPn/'
+
+        # 2) oEmbed returns HTML (200) -> treated as non-JSON
+        oembed_html = MagicMock()
+        oembed_html.status_code = 200
+        oembed_html.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        oembed_html.text = '<!DOCTYPE html><html>challenge</html>'
+        oembed_html.raise_for_status.return_value = None
+
+        oembed_html2 = MagicMock()
+        oembed_html2.status_code = 200
+        oembed_html2.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        oembed_html2.text = '<!DOCTYPE html><html>challenge</html>'
+        oembed_html2.raise_for_status.return_value = None
+
+        # 3) embed + captioned embed return 200 HTML without OG
+        embed_shell = MagicMock()
+        embed_shell.status_code = 200
+        embed_shell.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        embed_shell.text = '<!DOCTYPE html><html><head></head><body></body></html>'
+        embed_shell.content = embed_shell.text.encode('utf-8')
+
+        embed_shell2 = MagicMock()
+        embed_shell2.status_code = 200
+        embed_shell2.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        embed_shell2.text = '<!DOCTYPE html><html><head></head><body></body></html>'
+        embed_shell2.content = embed_shell2.text.encode('utf-8')
+
+        # 4) Authenticated JSON returns graphql caption + display_url
+        auth_json = MagicMock()
+        auth_json.status_code = 200
+        auth_json.headers = {'Content-Type': 'application/json'}
+        auth_json.raise_for_status.return_value = None
+        auth_json.json.return_value = {
+            'graphql': {
+                'shortcode_media': {
+                    'display_url': 'https://example.com/auththumb.jpg',
+                    'edge_media_to_caption': {
+                        'edges': [
+                            {'node': {'text': 'Receptnamn\n\nIngredienser:\n- kyckling\n- ris\n\nGör så här:\n1. Stek\n2. Servera'}}
+                        ]
+                    },
+                }
+            }
+        }
+
+        mock_get.side_effect = [
+            page_resp,
+            oembed_html,
+            oembed_html2,
+            embed_shell,
+            embed_shell2,
+            auth_json,
+        ]
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {
+                'url': 'https://www.instagram.com/reel/DLQXLAUugPn/?igsh=ZmF3YzV1YjU4M3l1',
+                'dish_type': 'dessert',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+
+        recipe_id = response.data['id']
+        created = Recipe.objects.get(id=recipe_id)
+        self.assertEqual(created.title, 'Receptnamn')
+        self.assertIn('kyckling', created.ingredients)
+        self.assertIn('Servera', created.steps)
+        self.assertEqual(created.image_url, 'https://example.com/auththumb.jpg')
+
+    @patch.dict('os.environ', {'INSTAGRAM_SESSIONID': 'fake-session'}, clear=False)
+    @patch('instaloader.Post.from_shortcode')
+    @patch('instaloader.Instaloader')
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_instagram_instaloader_fallback_when_json_fails(self, mock_get, mock_instaloader, mock_from_shortcode):
+        # Public endpoints blocked
+        page_resp = MagicMock()
+        page_resp.raise_for_status.return_value = None
+        page_resp.content = b"<html><head><title>Instagram</title></head><body>Login</body></html>"
+        page_resp.url = 'https://www.instagram.com/reel/DLQXLAUugPn/'
+
+        oembed_html = MagicMock()
+        oembed_html.status_code = 200
+        oembed_html.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        oembed_html.text = '<!DOCTYPE html><html>challenge</html>'
+        oembed_html.raise_for_status.return_value = None
+
+        oembed_html2 = MagicMock()
+        oembed_html2.status_code = 200
+        oembed_html2.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        oembed_html2.text = '<!DOCTYPE html><html>challenge</html>'
+        oembed_html2.raise_for_status.return_value = None
+
+        embed_shell = MagicMock()
+        embed_shell.status_code = 200
+        embed_shell.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        embed_shell.text = '<!DOCTYPE html><html><head></head><body></body></html>'
+        embed_shell.content = embed_shell.text.encode('utf-8')
+
+        embed_shell2 = MagicMock()
+        embed_shell2.status_code = 200
+        embed_shell2.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        embed_shell2.text = '<!DOCTYPE html><html><head></head><body></body></html>'
+        embed_shell2.content = embed_shell2.text.encode('utf-8')
+
+        # Auth JSON candidates all 404
+        json_404 = MagicMock()
+        json_404.status_code = 404
+        json_404.headers = {'Content-Type': 'text/html; charset="utf-8"'}
+        json_404.text = '<!DOCTYPE html><html>not found</html>'
+
+        # Provide enough 404 responses for all candidates.
+        mock_get.side_effect = [
+            page_resp,
+            oembed_html,
+            oembed_html2,
+            embed_shell,
+            embed_shell2,
+            json_404,
+            json_404,
+            json_404,
+            json_404,
+        ]
+
+        mock_loader = MagicMock()
+        mock_loader.context = MagicMock()
+        mock_loader.context._session = MagicMock()
+        mock_loader.context._session.cookies = MagicMock()
+        mock_instaloader.return_value = mock_loader
+
+        mock_post = MagicMock()
+        mock_post.caption = 'IL recept\n\nIngredienser:\n- ägg\n\nGör så här:\n1. Stek'
+        mock_post.url = 'https://example.com/ilthumb.jpg'
+        mock_from_shortcode.return_value = mock_post
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {
+                'url': 'https://www.instagram.com/reel/DLQXLAUugPn/?igsh=ZmF3YzV1YjU4M3l1',
+                'dish_type': 'dessert',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+
+        recipe_id = response.data['id']
+        created = Recipe.objects.get(id=recipe_id)
+        self.assertEqual(created.title, 'IL recept')
+        self.assertIn('ägg', created.ingredients)
+        self.assertIn('Stek', created.steps)
+        self.assertEqual(created.image_url, 'https://example.com/ilthumb.jpg')
+
     def test_api_token_obtain(self):
         response = self.client_api.post(
             '/api/auth/token/',

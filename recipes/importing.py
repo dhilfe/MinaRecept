@@ -546,20 +546,24 @@ def fetch_html(url: str, timeout: int = 10) -> tuple[str, bytes]:
 
     try:
         resp = fetch(url)
-        return url, resp.content
+        resp_url = getattr(resp, 'url', None)
+        final_url = resp_url if isinstance(resp_url, str) and resp_url else url
+        return final_url, resp.content
     except requests.RequestException as e:
         if 'www.' not in url:
             try:
                 scheme, rest = url.split('://', 1)
                 url_www = f"{scheme}://www.{rest}"
                 resp2 = fetch(url_www)
-                return url_www, resp2.content
+                resp2_url = getattr(resp2, 'url', None)
+                final_url = resp2_url if isinstance(resp2_url, str) and resp2_url else url_www
+                return final_url, resp2.content
             except requests.RequestException:
                 pass
         raise e
 
 
-def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
+def import_recipe_from_html(url: str, content: bytes, source_text: str | None = None) -> ImportedRecipeData:
     soup = BeautifulSoup(content, 'html.parser')
 
     def clean_title(raw_title: str) -> str:
@@ -587,6 +591,128 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
     og_image = soup.find('meta', property='og:image')
     if og_image:
         og_image_url = og_image.get('content', '') or None
+
+    def _is_instagram_url(u: str) -> bool:
+        return 'instagram.com' in (u or '').lower()
+
+    def _is_generic_instagram_title(t: str) -> bool:
+        low = (t or '').strip().lower()
+        return low in {
+            '',
+            'instagram',
+            'log in',
+            'log in • instagram',
+            'login • instagram',
+            'logga in',
+            'logga in • instagram',
+        }
+
+    def _extract_instagram_caption(text: str) -> str:
+        """Best-effort extract caption from IG og:title/og:description style strings."""
+        raw = (text or '').strip()
+        if not raw:
+            return ''
+        # Common patterns:
+        #   User on Instagram: “caption ...”
+        #   User on Instagram: "caption ..."
+        for marker in [' on Instagram: “', ' on Instagram: "']:
+            if marker in raw:
+                after = raw.split(marker, 1)[1]
+                after = after.rstrip('”').rstrip('"').strip()
+                return after
+        return raw
+
+    def _parse_caption_to_recipe(text: str) -> tuple[list[str], list[str], str]:
+        """Best-effort parse for captions (Instagram etc.)."""
+        import re
+
+        raw = (text or '').replace('\r\n', '\n').replace('\r', '\n')
+        # Some sources (e.g. embed HTML) contain literal "\\n" sequences.
+        raw = raw.replace('\\n', '\n')
+        raw = re.sub(r"https?://\S+", "", raw)
+        lines = [ln.strip() for ln in raw.split('\n') if ln.strip()]
+        if not lines:
+            return [], [], ''
+
+        def is_heading(line: str) -> bool:
+            l = line.strip()
+            if l.endswith(":"):
+                return True
+            low = l.lower().strip()
+            return low in {
+                "ingredienser",
+                "ingredients",
+                "gör så här",
+                "gor sa har",
+                "instruktioner",
+                "instructions",
+                "tillagning",
+            }
+
+        def normalize_heading(line: str) -> str:
+            return line.strip().rstrip(":").strip()
+
+        ing_start = None
+        step_start = None
+        for i, ln in enumerate(lines):
+            low = ln.lower().rstrip(":").strip()
+            if ing_start is None and ("ingredien" in low or low == "ingredients"):
+                ing_start = i + 1
+                continue
+            if step_start is None and (
+                "gör" in low
+                or "gor" in low
+                or "instruktion" in low
+                or low == "instructions"
+                or "tillag" in low
+            ):
+                step_start = i + 1
+                continue
+
+        def collect_until_next_heading(start_idx: int | None) -> list[str]:
+            if start_idx is None:
+                return []
+            out: list[str] = []
+            for ln in lines[start_idx:]:
+                if is_heading(ln):
+                    break
+                s = re.sub(r"^[-•*]+\s*", "", ln).strip()
+                if s:
+                    out.append(s)
+            return out
+
+        ing_lines = collect_until_next_heading(ing_start)
+        step_lines = collect_until_next_heading(step_start)
+
+        # If no explicit section markers, keep caption as description only.
+        if not ing_lines and not step_lines:
+            return [], [], raw.strip()
+
+        # Preserve headings like "Dressing:" by keeping lines ending with ":" inside the section.
+        def add_section_headings(start_idx: int | None, collected: list[str]) -> list[str]:
+            if start_idx is None:
+                return collected
+            out: list[str] = []
+            for ln in lines[start_idx:]:
+                # stop at next major section heading
+                if is_heading(ln) and (
+                    "ingredien" in ln.lower() or "gör" in ln.lower() or "gor" in ln.lower() or "instruktion" in ln.lower()
+                ):
+                    break
+                if ln.endswith(":") and normalize_heading(ln):
+                    out.append(normalize_heading(ln) + ":")
+                    continue
+                if is_heading(ln):
+                    break
+                s = re.sub(r"^[-•*]+\s*", "", ln).strip()
+                if s:
+                    out.append(s)
+            return out or collected
+
+        ing_lines = add_section_headings(ing_start, ing_lines)
+        step_lines = add_section_headings(step_start, step_lines)
+
+        return ing_lines, step_lines, ''
 
     recipe_data = extract_json_ld(soup)
     if recipe_data:
@@ -676,10 +802,846 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
             description = og_description.get('content', '')
 
     # 3. Title fallback (OG title)
+    og_title = soup.find('meta', property='og:title')
+    og_title_text = clean_title(og_title.get('content', '')) if og_title else ''
     if not title:
-        og_title = soup.find('meta', property='og:title')
-        if og_title:
-            title = clean_title(og_title.get('content', ''))
+        if og_title_text:
+            title = og_title_text
+
+    # Instagram-specific improvements: IG often returns <title>Instagram</title> for logged-out users.
+    if _is_instagram_url(url) and _is_generic_instagram_title(title):
+        title = ''
+        if og_title_text:
+            title = og_title_text
+
+    if _is_instagram_url(url):
+        import logging
+        import os
+
+        logger = logging.getLogger(__name__)
+
+        def _instagram_request_config() -> tuple[dict | None, str]:
+            """Return (proxies, user_agent) for Instagram requests.
+
+            Optional env vars:
+            - INSTAGRAM_PROXY_URL: e.g. http://user:pass@host:port (used for both http/https)
+            - INSTAGRAM_USER_AGENT: overrides the default desktop UA
+            """
+            proxy_url = (os.environ.get('INSTAGRAM_PROXY_URL') or '').strip()
+            proxies = None
+            if proxy_url:
+                proxies = {
+                    'http': proxy_url,
+                    'https': proxy_url,
+                }
+
+            default_ua = (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+            )
+            ua = (os.environ.get('INSTAGRAM_USER_AGENT') or '').strip() or default_ua
+            return proxies, ua
+
+        def _get_instagram_auth_cookies() -> tuple[dict[str, str], bool]:
+            """Return (cookies, has_raw_cookie_string).
+
+            If INSTAGRAM_COOKIES is set, we parse that full Cookie header string.
+            Otherwise we fall back to INSTAGRAM_SESSIONID (+ optional csrftoken/ds_user_id).
+            """
+            raw = (os.environ.get('INSTAGRAM_COOKIES') or '').strip()
+            cookies: dict[str, str] = {}
+            has_raw = bool(raw)
+            if raw:
+                for part in raw.split(';'):
+                    part = part.strip()
+                    if not part or '=' not in part:
+                        continue
+                    k, v = part.split('=', 1)
+                    k = k.strip()
+                    v = v.strip()
+                    if k and v:
+                        cookies[k] = v
+
+            sessionid = (os.environ.get('INSTAGRAM_SESSIONID') or '').strip()
+            if sessionid and 'sessionid' not in cookies:
+                cookies['sessionid'] = sessionid
+
+            csrftoken = (os.environ.get('INSTAGRAM_CSRFTOKEN') or '').strip()
+            if csrftoken and 'csrftoken' not in cookies:
+                cookies['csrftoken'] = csrftoken
+
+            ds_user_id = (os.environ.get('INSTAGRAM_DS_USER_ID') or '').strip()
+            if ds_user_id and 'ds_user_id' not in cookies:
+                cookies['ds_user_id'] = ds_user_id
+
+            return cookies, has_raw
+
+        # Prefer OG image for reels/posts.
+        if og_image_url:
+            image_url = og_image_url
+
+        # Try to extract caption from available fields.
+        og_desc = soup.find('meta', property='og:description')
+        og_desc_text = (og_desc.get('content', '') if og_desc else '')
+        caption = _extract_instagram_caption(source_text or '')
+        if not caption:
+            caption = _extract_instagram_caption(og_desc_text)
+        if not caption and og_title_text:
+            caption = _extract_instagram_caption(og_title_text)
+
+        did_try_oembed = False
+        oembed_ok = False
+
+        def _fetch_instagram_oembed(target_url: str) -> dict | None:
+            """Fetch Instagram oEmbed (no auth) as a fallback for caption/thumbnail."""
+            try:
+                from urllib.parse import quote
+                import logging
+
+                logger = logging.getLogger(__name__)
+
+                encoded = quote(target_url, safe='')
+                proxies, ua = _instagram_request_config()
+
+                # In practice, https://www.instagram.com/oembed/ tends to be more reliable than api.instagram.com
+                # for unauthenticated requests.
+                oembed_candidates = [
+                    f"https://www.instagram.com/oembed/?url={encoded}&omitscript=true",
+                    f"https://api.instagram.com/oembed/?url={encoded}&omitscript=true",
+                ]
+
+                last_status: int | None = None
+                last_body: str | None = None
+                last_ct: str | None = None
+                last_url: str | None = None
+                last_error: str | None = None
+
+                for oembed_url in oembed_candidates:
+                    try:
+                        resp = requests.get(
+                            oembed_url,
+                            headers={
+                                "User-Agent": ua,
+                                "Accept": "application/json",
+                            },
+                            proxies=proxies,
+                            timeout=10,
+                        )
+                        last_url = oembed_url
+                        raw_status = getattr(resp, 'status_code', None)
+                        status: int | None = None
+                        if isinstance(raw_status, int):
+                            status = raw_status
+                        elif isinstance(raw_status, str) and raw_status.isdigit():
+                            status = int(raw_status)
+                        last_status = status
+                        last_ct = (getattr(resp, 'headers', {}) or {}).get('Content-Type')
+
+                        if status is not None and status >= 400:
+                            last_body = (getattr(resp, 'text', '') or '')[:300]
+                        resp.raise_for_status()
+
+                        # Instagram sometimes returns HTML challenges/rate-limit pages with 200.
+                        # Treat non-JSON as failure and log a short snippet.
+                        if last_ct and 'json' not in last_ct.lower():
+                            last_body = (getattr(resp, 'text', '') or '')[:300]
+                            raise ValueError(f"Non-JSON oEmbed response ct={last_ct}")
+
+                        try:
+                            data = resp.json()
+                        except Exception as e:
+                            last_body = (getattr(resp, 'text', '') or '')[:300]
+                            raise e
+                        if isinstance(data, dict):
+                            return data
+                    except Exception as e:
+                        last_error = f"{type(e).__name__}: {e}"
+                        if last_body is None:
+                            last_body = (getattr(resp, 'text', '') or '')[:300] if 'resp' in locals() else None
+                        continue
+
+                if last_status is not None and last_status >= 400:
+                    logger.warning(
+                        "Instagram oEmbed failed (status=%s ct=%s url=%s body=%s)",
+                        last_status,
+                        last_ct,
+                        last_url,
+                        (last_body or "")[:300],
+                    )
+                elif last_error:
+                    logger.warning(
+                        "Instagram oEmbed failed (%s ct=%s url=%s body=%s)",
+                        last_error,
+                        last_ct,
+                        last_url,
+                        (last_body or "")[:300],
+                    )
+                return None
+            except Exception:
+                return None
+
+        def _try_instagram_embed_fallback(target_url: str) -> tuple[str, str, str] | None:
+            """Try fetching the public /embed/ page, which often contains OG tags even when the main page doesn't."""
+            try:
+                import logging
+                from urllib.parse import urlsplit
+
+                logger = logging.getLogger(__name__)
+                parts = urlsplit(target_url)
+                path_parts = [p for p in (parts.path or '').split('/') if p]
+                if len(path_parts) < 2:
+                    return None
+                kind = path_parts[0].lower()
+                shortcode = path_parts[1]
+                if kind not in {'reel', 'p', 'tv'}:
+                    return None
+
+                embed_candidates = [
+                    f"https://www.instagram.com/{kind}/{shortcode}/embed/",
+                    f"https://www.instagram.com/{kind}/{shortcode}/embed/captioned/",
+                ]
+
+                proxies, ua = _instagram_request_config()
+                headers = {
+                    "User-Agent": ua,
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7",
+                }
+
+                cookies, has_raw_cookies = _get_instagram_auth_cookies()
+                # Do authenticated embed attempts when we likely have a real logged-in cookie jar.
+                # - Full cookie string provided, OR
+                # - csrftoken provided (often required alongside sessionid for authenticated responses)
+                should_try_auth_embed = bool(cookies.get('sessionid')) and (
+                    has_raw_cookies or bool(cookies.get('csrftoken'))
+                )
+
+                for embed_url in embed_candidates:
+                    resp = requests.get(embed_url, headers=headers, proxies=proxies, timeout=10)
+                    status = getattr(resp, 'status_code', 0)
+                    ct = (getattr(resp, 'headers', {}) or {}).get('Content-Type')
+
+                    if status >= 400:
+                        logger.warning(
+                            "Instagram embed fetch failed (status=%s ct=%s url=%s)",
+                            status,
+                            ct,
+                            embed_url,
+                        )
+                        continue
+
+                    embed_soup = BeautifulSoup(resp.content, 'html.parser')
+                    e_title = embed_soup.find('meta', property='og:title')
+                    e_desc = embed_soup.find('meta', property='og:description')
+                    e_img = embed_soup.find('meta', property='og:image')
+
+                    e_title_text = clean_title(e_title.get('content', '')) if e_title else ''
+                    e_desc_text = (e_desc.get('content', '') if e_desc else '')
+                    e_img_url = (e_img.get('content', '') if e_img else '')
+
+                    # Some embed variants put caption text as visible <p> content.
+                    if not e_desc_text:
+                        paras = [clean_text(p.get_text("\n", strip=True)) for p in embed_soup.find_all('p')]
+                        paras = [p for p in paras if p]
+                        if paras:
+                            e_desc_text = "\n\n".join(paras)[:4000]
+
+                    if e_title_text or e_desc_text or e_img_url:
+                        return e_title_text, e_desc_text, e_img_url
+
+                    # If public embed is a JS shell, retry once with cookies.
+                    if should_try_auth_embed:
+                        try:
+                            auth_headers = dict(headers)
+                            auth_headers['Referer'] = target_url
+                            if cookies.get('csrftoken'):
+                                auth_headers['X-CSRFToken'] = cookies['csrftoken']
+                            auth_resp = requests.get(
+                                embed_url,
+                                headers=auth_headers,
+                                cookies=cookies,
+                                proxies=proxies,
+                                timeout=10,
+                            )
+                            a_status = getattr(auth_resp, 'status_code', 0)
+                            a_ct = (getattr(auth_resp, 'headers', {}) or {}).get('Content-Type')
+                            if a_status < 400:
+                                auth_soup = BeautifulSoup(auth_resp.content, 'html.parser')
+                                a_title = auth_soup.find('meta', property='og:title')
+                                a_desc = auth_soup.find('meta', property='og:description')
+                                a_img = auth_soup.find('meta', property='og:image')
+                                a_title_text = clean_title(a_title.get('content', '')) if a_title else ''
+                                a_desc_text = (a_desc.get('content', '') if a_desc else '')
+                                a_img_url = (a_img.get('content', '') if a_img else '')
+
+                                if not a_desc_text:
+                                    paras = [clean_text(p.get_text("\n", strip=True)) for p in auth_soup.find_all('p')]
+                                    paras = [p for p in paras if p]
+                                    if paras:
+                                        a_desc_text = "\n\n".join(paras)[:4000]
+
+                                if a_title_text or a_desc_text or a_img_url:
+                                    logger.info(
+                                        "Instagram authenticated embed succeeded (status=%s ct=%s url=%s)",
+                                        a_status,
+                                        a_ct,
+                                        embed_url,
+                                    )
+                                    return a_title_text, a_desc_text, a_img_url
+                                else:
+                                    a_snip = (getattr(auth_resp, 'text', '') or '')[:200]
+                                    logger.warning(
+                                        "Instagram authenticated embed returned no OG/caption (status=%s ct=%s url=%s body=%s)",
+                                        a_status,
+                                        a_ct,
+                                        embed_url,
+                                        a_snip,
+                                    )
+                            else:
+                                logger.warning(
+                                    "Instagram authenticated embed failed (status=%s ct=%s url=%s)",
+                                    a_status,
+                                    a_ct,
+                                    embed_url,
+                                )
+                        except Exception:
+                            pass
+
+                    snippet = (getattr(resp, 'text', '') or '')[:200]
+                    logger.warning(
+                        "Instagram embed returned no OG/caption (status=%s ct=%s url=%s body=%s)",
+                        status,
+                        ct,
+                        embed_url,
+                        snippet,
+                    )
+
+                return None
+            except Exception:
+                return None
+
+        def _extract_caption_from_oembed_html(html: str) -> str:
+            try:
+                if not (html or '').strip():
+                    return ""
+                embed_soup = BeautifulSoup(html, "html.parser")
+                # Instagram embed often includes caption text in <p> elements.
+                texts = []
+                for p in embed_soup.find_all("p"):
+                    t = p.get_text("\n", strip=True)
+                    t = (t or '').replace('\\n', '\n').strip()
+                    if t:
+                        texts.append(t)
+                # Deduplicate and join.
+                out = []
+                seen = set()
+                for t in texts:
+                    if t in seen:
+                        continue
+                    seen.add(t)
+                    out.append(t)
+                return "\n\n".join(out).strip()
+            except Exception:
+                return ""
+
+        # If IG HTML didn't provide useful metadata, try oEmbed.
+        should_try_oembed = (
+            not caption
+            and (
+                (not ingredients)
+                or (not steps)
+                or (not title)
+                or _is_generic_instagram_title(title)
+                or (og_title_text and ' on instagram:' in og_title_text.lower())
+            )
+        )
+
+        if should_try_oembed:
+            did_try_oembed = True
+            oembed = _fetch_instagram_oembed(url)
+            if oembed:
+                oembed_ok = True
+                thumb = clean_text(str(oembed.get("thumbnail_url") or ""))
+                if thumb and not image_url:
+                    image_url = thumb
+
+                # oEmbed sometimes provides a title derived from caption.
+                oe_title = clean_text(str(oembed.get("title") or ""))
+                oe_html = str(oembed.get("html") or "")
+                oe_caption = _extract_caption_from_oembed_html(oe_html)
+                if not oe_caption:
+                    oe_caption = oe_title
+
+                if oe_caption:
+                    caption = oe_caption
+
+                # If title still empty, use caption first line or fallback.
+                if not title or _is_generic_instagram_title(title):
+                    if caption:
+                        cap_first = caption.splitlines()[0].strip()
+                        if cap_first:
+                            title = clean_title(cap_first)[:200]
+                    if not title:
+                        author = clean_text(str(oembed.get("author_name") or ""))
+                        title = f"Recept från {author}" if author else "Recept från Instagram"
+
+        # If oEmbed is blocked and we still have nothing, try the public embed page.
+        if not caption and not oembed_ok:
+            embed = _try_instagram_embed_fallback(url)
+            if embed:
+                e_title_text, e_desc_text, e_img_url = embed
+                if e_img_url and not image_url:
+                    image_url = e_img_url
+                if not caption and e_desc_text:
+                    caption = _extract_instagram_caption(e_desc_text)
+                if not caption and e_title_text:
+                    caption = _extract_instagram_caption(e_title_text)
+                if not title and e_title_text:
+                    title = e_title_text
+
+        def _extract_caption_from_instagram_json(data: object) -> tuple[str, str | None]:
+            """Return (caption, image_url) from known Instagram JSON shapes."""
+            try:
+                if not isinstance(data, dict):
+                    return '', None
+
+                def _preserve_caption(raw: object) -> str:
+                    # Keep newlines so downstream parsing (Ingredienser/Gör så här) works.
+                    s = str(raw or '')
+                    s = s.replace('\r\n', '\n').replace('\r', '\n')
+                    s = s.replace('\xa0', ' ')
+                    return s.strip()
+
+                # Newer __a=1 responses may contain "graphql".
+                graphql = data.get('graphql') if isinstance(data.get('graphql'), dict) else None
+                if graphql and isinstance(graphql.get('shortcode_media'), dict):
+                    media = graphql['shortcode_media']
+                    caption_edges = (
+                        media.get('edge_media_to_caption', {})
+                        if isinstance(media.get('edge_media_to_caption'), dict)
+                        else {}
+                    )
+                    edges = caption_edges.get('edges') if isinstance(caption_edges.get('edges'), list) else []
+                    cap = ''
+                    if edges:
+                        node = edges[0].get('node') if isinstance(edges[0], dict) else None
+                        if isinstance(node, dict):
+                            cap = _preserve_caption(node.get('text') or '')
+
+                    img = None
+                    if isinstance(media.get('display_url'), str) and media.get('display_url'):
+                        img = media.get('display_url')
+                    elif isinstance(media.get('thumbnail_src'), str) and media.get('thumbnail_src'):
+                        img = media.get('thumbnail_src')
+
+                    return cap, img
+
+                # Alternative shape: "items" list.
+                items = data.get('items') if isinstance(data.get('items'), list) else []
+                if items:
+                    item0 = items[0] if isinstance(items[0], dict) else {}
+                    cap = ''
+                    caption_obj = item0.get('caption')
+                    if isinstance(caption_obj, dict):
+                        cap = _preserve_caption(caption_obj.get('text') or '')
+
+                    img = None
+                    # Try common image fields
+                    for key in ['image_versions2', 'display_url', 'thumbnail_url', 'thumbnail_src']:
+                        v = item0.get(key)
+                        if isinstance(v, str) and v:
+                            img = v
+                            break
+                        if isinstance(v, dict) and isinstance(v.get('candidates'), list) and v['candidates']:
+                            cand0 = v['candidates'][0]
+                            if isinstance(cand0, dict) and isinstance(cand0.get('url'), str):
+                                img = cand0['url']
+                                break
+                    return cap, img
+
+                return '', None
+            except Exception:
+                return '', None
+
+        def _try_instagram_authenticated_json(target_url: str) -> tuple[str, str | None] | None:
+            """Attempt authenticated JSON fetch using Instagram auth cookies.
+
+            This is optional and only runs when public endpoints are blocked.
+            """
+            try:
+                import json
+
+                cookies, _has_raw = _get_instagram_auth_cookies()
+                if not cookies.get('sessionid'):
+                    return None
+
+                try:
+                    logger.info(
+                        "Instagram auth cookie keys present: %s",
+                        ",".join(sorted(cookies.keys())),
+                    )
+                except Exception:
+                    pass
+
+                from urllib.parse import urlsplit
+
+                parts = urlsplit(target_url)
+                path_parts = [p for p in (parts.path or '').split('/') if p]
+                if len(path_parts) < 2:
+                    return None
+
+                kind = path_parts[0].lower()
+                shortcode = path_parts[1]
+                if kind not in {'reel', 'p', 'tv'}:
+                    return None
+
+                proxies, ua = _instagram_request_config()
+                json_candidates = [
+                    f"https://www.instagram.com/{kind}/{shortcode}/?__a=1&__d=dis",
+                    f"https://www.instagram.com/{kind}/{shortcode}/?__a=1",
+                    f"https://www.instagram.com/p/{shortcode}/?__a=1&__d=dis",
+                    f"https://www.instagram.com/p/{shortcode}/?__a=1",
+                ]
+
+                headers = {
+                    "User-Agent": ua,
+                    "Accept": "application/json, text/plain, */*",
+                    "X-Requested-With": "XMLHttpRequest",
+                    # Some deployments require these to avoid HTML/404 even with sessionid.
+                    "X-IG-App-ID": "936619743392459",
+                    "X-ASBD-ID": "129477",
+                    "Referer": target_url,
+                }
+
+                if cookies.get('csrftoken'):
+                    headers['X-CSRFToken'] = cookies['csrftoken']
+
+                def _maybe_parse_instagram_json(resp: object) -> dict | None:
+                    """Parse Instagram responses that may be JSON or `for (;;);{...}`."""
+                    try:
+                        text = (getattr(resp, 'text', '') or '').strip()
+                        if not text:
+                            return None
+
+                        if text.startswith('for (;;);'):
+                            text = text[len('for (;;);'):].lstrip()
+                        # Some endpoints return JSON but with non-json content-type.
+                        if text and text[0] in '{[':
+                            data = json.loads(text)
+                            return data if isinstance(data, dict) else None
+                        return None
+                    except Exception:
+                        return None
+
+                for json_url in json_candidates:
+                    resp = requests.get(
+                        json_url,
+                        headers=headers,
+                        cookies=cookies,
+                        proxies=proxies,
+                        timeout=10,
+                    )
+
+                    ct = (getattr(resp, 'headers', {}) or {}).get('Content-Type')
+                    if getattr(resp, 'status_code', 0) >= 400:
+                        logger.warning(
+                            "Instagram auth JSON fetch failed (status=%s ct=%s url=%s)",
+                            getattr(resp, 'status_code', None),
+                            ct,
+                            json_url,
+                        )
+                        continue
+
+                    if ct and 'json' not in ct.lower():
+                        # Instagram frequently returns application/x-javascript + `for (;;);{...}`
+                        data = _maybe_parse_instagram_json(resp)
+                        if not data:
+                            snippet = (getattr(resp, 'text', '') or '')[:200]
+                            logger.warning(
+                                "Instagram auth JSON non-JSON response (ct=%s url=%s body=%s)",
+                                ct,
+                                json_url,
+                                snippet,
+                            )
+                            continue
+                    else:
+                        try:
+                            data = resp.json()
+                        except Exception:
+                            data = _maybe_parse_instagram_json(resp)
+                            if not data:
+                                snippet = (getattr(resp, 'text', '') or '')[:200]
+                                logger.warning(
+                                    "Instagram auth JSON parse failed (ct=%s url=%s body=%s)",
+                                    ct,
+                                    json_url,
+                                    snippet,
+                                )
+                                continue
+
+                    # If Instagram returns an error payload, treat as a miss.
+                    if isinstance(data, dict) and data.get('error'):
+                        logger.warning(
+                            "Instagram auth JSON error payload (error=%s summary=%s url=%s)",
+                            data.get('error'),
+                            data.get('errorSummary'),
+                            json_url,
+                        )
+                        continue
+
+                    cap, img = _extract_caption_from_instagram_json(data)
+                    if cap or img:
+                        return cap, img
+
+                return None
+            except Exception as e:
+                logger.warning("Instagram auth JSON exception (%s)", e)
+                return None
+
+        def _try_instagram_instaloader(target_url: str) -> tuple[str, str | None] | None:
+            """Try Instaloader with session cookie as a last resort.
+
+            Public endpoints can be blocked (JS shell). Instaloader often still works with a valid session.
+            """
+            sessionid = (os.environ.get('INSTAGRAM_SESSIONID') or '').strip()
+            raw_cookies = (os.environ.get('INSTAGRAM_COOKIES') or '').strip()
+            if not sessionid and not raw_cookies:
+                return None
+
+            try:
+                import re
+                import instaloader
+
+                m = re.search(r"/(?:p|reel|tv)/([^/?#&]+)/?", target_url)
+                if not m:
+                    return None
+                shortcode = m.group(1)
+
+                proxies, _ua = _instagram_request_config()
+
+                L = instaloader.Instaloader(quiet=True)
+                try:
+                    L.context.max_connection_attempts = 1
+                except Exception:
+                    pass
+                try:
+                    L.context.request_timeout = 10
+                except Exception:
+                    pass
+
+                # Apply proxy to Instaloader session if configured.
+                if proxies:
+                    try:
+                        L.context._session.proxies.update(proxies)
+                    except Exception:
+                        pass
+
+                cookies: dict[str, str] = {}
+                if raw_cookies:
+                    for part in raw_cookies.split(';'):
+                        part = part.strip()
+                        if not part or '=' not in part:
+                            continue
+                        k, v = part.split('=', 1)
+                        k = k.strip()
+                        v = v.strip()
+                        if k and v:
+                            cookies[k] = v
+                if sessionid and 'sessionid' not in cookies:
+                    cookies['sessionid'] = sessionid
+                csrftoken = (os.environ.get('INSTAGRAM_CSRFTOKEN') or '').strip()
+                if csrftoken and 'csrftoken' not in cookies:
+                    cookies['csrftoken'] = csrftoken
+                ds_user_id = (os.environ.get('INSTAGRAM_DS_USER_ID') or '').strip()
+                if ds_user_id and 'ds_user_id' not in cookies:
+                    cookies['ds_user_id'] = ds_user_id
+
+                try:
+                    for k, v in cookies.items():
+                        L.context._session.cookies.set(k, v, domain='.instagram.com')
+                except Exception:
+                    pass
+
+                post = instaloader.Post.from_shortcode(L.context, shortcode)
+                cap = (getattr(post, 'caption', '') or '').strip()
+                img: str | None = None
+                for attr in ['url', 'display_url', 'thumbnail_url', 'thumbnail_src']:
+                    v = getattr(post, attr, None)
+                    if isinstance(v, str) and v:
+                        img = v
+                        break
+                    try:
+                        s = str(v)
+                        if s.startswith('http'):
+                            img = s
+                            break
+                    except Exception:
+                        pass
+
+                if not cap and not img:
+                    return None
+                return cap, img
+            except Exception as e:
+                logger.warning("Instagram instaloader fallback failed (%s)", e)
+                return None
+
+        # Final fallback: if everything public is blocked, try optional authenticated JSON.
+        if not caption:
+            auth = _try_instagram_authenticated_json(url)
+            if auth:
+                auth_caption, auth_image = auth
+                if auth_caption:
+                    caption = auth_caption
+                if auth_image and not image_url:
+                    image_url = auth_image
+
+        if not caption:
+            il = _try_instagram_instaloader(url)
+            if il:
+                il_caption, il_image = il
+                if il_caption:
+                    caption = il_caption
+                if il_image and not image_url:
+                    image_url = il_image
+
+        # Prefer the caption first line as title for IG (og:title is often "User on Instagram: \"...\"").
+        if caption:
+            cap_first = caption.splitlines()[0].strip()
+            if cap_first and (not title or ' on instagram:' in title.lower()):
+                title = clean_title(cap_first)[:200]
+
+        # Parse ingredients/steps from caption if we don't have any.
+        if caption and (not ingredients or not steps):
+            cap_ings, cap_steps, cap_desc = _parse_caption_to_recipe(caption)
+            if cap_ings and not ingredients:
+                ingredients = cap_ings
+            if cap_steps and not steps:
+                steps = cap_steps
+            if cap_desc and not description:
+                description = cap_desc
+
+        # If caption parsing didn't yield both ingredients and steps, try OCR on the best available image.
+        # Only runs when an OpenAI key is configured (avoid mock data).
+        # Heuristic guard: only do this when the caption looks recipe-like to avoid unnecessary OCR.
+        def _looks_like_recipe_caption(text: str) -> bool:
+            import re
+
+            s = (text or '').strip().lower()
+            if not s:
+                return False
+            # Strong signal: explicit section markers.
+            if 'ingredien' in s or 'gör så' in s or 'gor sa' in s:
+                return True
+            # Otherwise look for common Swedish cooking verbs / temps.
+            if re.search(r"\b(stek|tillsätt|strö|servera|lägg|häll|ringla|toppa|blanda|vispa|rör|koka|låt|hacka|skär|sätt|forma|smaka|bryn)\b", s):
+                return True
+            if re.search(r"\b\d+\s*(?:°|grader|c)\b", s):
+                return True
+            return False
+
+        needs_structured = bool(not ingredients or not steps)
+        if caption and image_url and needs_structured and not _looks_like_recipe_caption(caption):
+            try:
+                logger.info(
+                    "Instagram OCR fallback skipped (caption not recipe-like; url=%s image_url=%s caption_len=%s)",
+                    url,
+                    image_url,
+                    len(caption or ''),
+                )
+            except Exception:
+                pass
+
+        if caption and image_url and needs_structured and _looks_like_recipe_caption(caption):
+            try:
+                from io import BytesIO
+                from .ocr_service import ImageRecipeParser
+
+                parser = ImageRecipeParser()
+                if not getattr(parser, "api_key", None):
+                    try:
+                        logger.info(
+                            "Instagram OCR fallback skipped (OPENAI_API_KEY missing; url=%s image_url=%s)",
+                            url,
+                            image_url,
+                        )
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        logger.info(
+                            "Instagram OCR fallback start (url=%s image_url=%s need_ingredients=%s need_steps=%s)",
+                            url,
+                            image_url,
+                            bool(not ingredients),
+                            bool(not steps),
+                        )
+                    except Exception:
+                        pass
+                    proxies, ua = _instagram_request_config()
+                    img_resp = requests.get(
+                        image_url,
+                        headers={"User-Agent": ua, "Accept": "image/*,*/*;q=0.8"},
+                        proxies=proxies,
+                        timeout=10,
+                    )
+                    img_resp.raise_for_status()
+
+                    img_bytes = getattr(img_resp, "content", b"") or b""
+                    if len(img_bytes) <= 8 * 1024 * 1024:
+                        f = BytesIO(img_bytes)
+                        f.name = "instagram_image"
+                        try:
+                            ct = (getattr(img_resp, "headers", {}) or {}).get("Content-Type", "")
+                            f.content_type = ct
+                        except Exception:
+                            pass
+
+                        ocr = parser.parse_image(f)
+                        if isinstance(ocr, dict):
+                            ocr_ing = (ocr.get("ingredients") or "").strip()
+                            ocr_steps = (ocr.get("steps") or "").strip()
+                            filled_any = False
+                            if ocr_ing and not ingredients:
+                                ingredients = [ln.strip() for ln in ocr_ing.splitlines() if ln.strip()]
+                                filled_any = True
+                            if ocr_steps and not steps:
+                                steps = [ln.strip() for ln in ocr_steps.splitlines() if ln.strip()]
+                                filled_any = True
+
+                            try:
+                                logger.info(
+                                    "Instagram OCR fallback done (url=%s filled_any=%s ingredients_lines=%s steps_lines=%s)",
+                                    url,
+                                    filled_any,
+                                    len(ingredients or []),
+                                    len(steps or []),
+                                )
+                            except Exception:
+                                pass
+            except Exception as e:
+                logger.warning("Instagram OCR fallback failed (%s)", e)
+
+        # As a fallback, keep the caption as description so the user gets *something*.
+        if not description and caption:
+            description = caption
+
+        # Append original source line for traceability (requested UX).
+        src_line = f"Originalreceptet är från {url}"
+        if src_line not in (description or ''):
+            description = f"{(description or '').strip()}\n\n{src_line}".strip()
+
+        # If we still ended up with essentially nothing, log loudly for production debugging.
+        if not title or (not ingredients and not steps and (description or '').strip() == src_line):
+            logger.error(
+                "Instagram import empty (url=%s did_try_oembed=%s oembed_ok=%s title=%r og_title=%r og_desc_len=%s caption_len=%s)",
+                url,
+                did_try_oembed,
+                oembed_ok,
+                title,
+                og_title_text,
+                len(og_desc_text or ''),
+                len(caption or ''),
+            )
     
     # 4. Fallback for Kokaihop: ingredients from meta keywords
     def _extract_kokaihop_friendly_url(raw_url: str) -> str | None:
@@ -1235,10 +2197,21 @@ def import_recipe_from_html(url: str, content: bytes) -> ImportedRecipeData:
     )
 
 
-def import_recipe_from_url(url: str) -> ImportedRecipeData:
+def import_recipe_from_url(url: str, source_text: str | None = None) -> ImportedRecipeData:
     url = _normalize_url(url)
     if not url:
         raise ValueError('Missing url')
 
+    # Instagram share links often include tracking query params like ?igsh=...
+    # These can cause different (more restricted) responses and also confuse oEmbed.
+    if 'instagram.com' in url.lower():
+        try:
+            from urllib.parse import urlsplit, urlunsplit
+
+            parts = urlsplit(url)
+            url = urlunsplit((parts.scheme, parts.netloc, parts.path, '', ''))
+        except Exception:
+            pass
+
     final_url, content = fetch_html(url)
-    return import_recipe_from_html(final_url, content)
+    return import_recipe_from_html(final_url, content, source_text=source_text)
