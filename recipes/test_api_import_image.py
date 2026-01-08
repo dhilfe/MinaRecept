@@ -261,6 +261,54 @@ class ImportImageAPITests(TestCase):
         self.assertIn("gul lök", data["ingredients"].lower())
 
     @patch("recipes.ocr_service.ImageRecipeParser")
+    def test_import_image_instagram_caption_identical_ingredients_and_steps_triggers_ocr_fallback(
+        self, mock_parser_cls
+    ):
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.api_key = "test-key"
+        mock_parser.parse_image.return_value = {
+            "title": "",
+            "description": "",
+            "ingredients": "1 dl mjöl\n2 ägg",
+            "steps": "",
+            "cooking_time": 0,
+            "servings": 4,
+        }
+
+        caption_with_duplication = (
+            "Testrecept\n"
+            "Ingredienser:\n"
+            "Stek löken i smör.\n"
+            "Tillsätt grädde och soja och låt puttra i 5 minuter.\n"
+            "Smaka av med salt och vitpeppar och servera direkt.\n"
+            "Gör så här:\n"
+            "Stek löken i smör.\n"
+            "Tillsätt grädde och soja och låt puttra i 5 minuter.\n"
+            "Smaka av med salt och vitpeppar och servera direkt.\n"
+        )
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={
+                "image": img,
+                "source_url": "https://www.instagram.com/reel/DUP/",
+                "source_text": caption_with_duplication,
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        # Ingredients should come from OCR fallback (not duplicated steps).
+        self.assertIn("mjöl", data["ingredients"].lower())
+        self.assertIn("ägg", data["ingredients"].lower())
+        # Steps should remain from caption.
+        self.assertIn("Stek löken", data["steps"])
+
+    @patch("recipes.ocr_service.ImageRecipeParser")
     def test_import_image_extracts_hashtags_from_instagram_caption(self, mock_parser_cls):
         mock_parser = mock_parser_cls.return_value
         mock_parser.parse_image.return_value = {}

@@ -792,6 +792,23 @@ class RecipeViewSet(OwnedModelViewSet):
                 if s_desc and not desc_extra:
                     desc_extra = s_desc
 
+            # If the caption parser misclassifies and produces identical content for ingredients and steps,
+            # treat ingredients as missing so OCR fallback can fill it from the image.
+            if parsed_ing and parsed_steps:
+                import re
+
+                def _norm(s: str) -> str:
+                    return re.sub(r"\s+", " ", (s or "").strip()).lower()
+
+                norm_ing = _norm(parsed_ing)
+                norm_steps = _norm(parsed_steps)
+                if len(norm_ing) >= 80 and norm_ing == norm_steps:
+                    logger.info(
+                        "Instagram caption parse produced identical ingredients/steps; forcing ingredients empty for OCR fallback (source_url=%s)",
+                        source_url,
+                    )
+                    parsed_ing = ""
+
             if parsed_ing:
                 ingredients = parsed_ing
             if parsed_steps:
