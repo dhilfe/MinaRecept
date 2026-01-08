@@ -199,6 +199,55 @@ final class APIClient {
         }
     }
 
+    func createRecipe(
+        title: String,
+        description: String,
+        ingredients: String,
+        steps: String,
+        cookingTime: Int,
+        servings: Int,
+        dishType: String,
+        tags: String,
+        token: String
+    ) async throws -> RecipeDTO {
+        let url = try url("recipes/")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var body: [String: Any] = [
+            "title": title,
+            "description": description,
+            "ingredients": ingredients,
+            "steps": steps,
+            "cooking_time": cookingTime,
+            "servings": servings,
+            "dish_type": dishType,
+        ]
+        if !tags.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            body["tags"] = tags
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw APIError.network(error)
+        }
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else { throw APIError.httpStatus(http.statusCode, nil) }
+
+        do {
+            return try decoder.decode(RecipeDTO.self, from: data)
+        } catch {
+            throw APIError.decoding(error)
+        }
+    }
+
     func createShoppingList(name: String, isRecurring: Bool, token: String) async throws -> ShoppingListDTO {
         let url = try url("shopping-lists/")
         var request = URLRequest(url: url)

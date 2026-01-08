@@ -13,6 +13,7 @@ struct RecipeListView: View {
     @State private var searchText: String = ""
     @State private var selectedCategory: String? = nil
     @State private var path = NavigationPath()
+    @State private var showCreateSheet: Bool = false
 
     private func performHomeReset() {
         path = NavigationPath()
@@ -133,7 +134,13 @@ struct RecipeListView: View {
                 RecipeDetailView(recipe: recipe)
             }
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        showCreateSheet = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+
                     Button("Logga ut") { session.logout() }
                 }
 
@@ -142,6 +149,14 @@ struct RecipeListView: View {
                         ProgressView()
                     }
                 }
+            }
+            .sheet(isPresented: $showCreateSheet) {
+                RecipeCreateView { created in
+                    recipes.append(created)
+                    session.triggerReloadRecipes()
+                    path.append(created)
+                }
+                .environmentObject(session)
             }
             .overlay {
                 if isLoading && recipes.isEmpty {
