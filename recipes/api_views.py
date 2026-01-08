@@ -816,7 +816,9 @@ class RecipeViewSet(OwnedModelViewSet):
                     desc_extra = s_desc
 
             # If the caption parser misclassifies and produces identical content for ingredients and steps,
-            # do NOT put that text into ingredients. Instead, allow OCR to overwrite ingredients.
+            # do NOT put step text into ingredients. Instead, allow OCR to overwrite ingredients.
+            # If the parsed ingredient block contains a mix of ingredients + steps, try to salvage
+            # ingredient-like lines rather than discarding everything.
             if parsed_ing and parsed_steps:
                 import re
 
@@ -860,13 +862,51 @@ class RecipeViewSet(OwnedModelViewSet):
                             step_like += 1
                     return step_like >= max(2, int(len(lines) * 0.6))
 
+                def _looks_like_step_line(line: str) -> bool:
+                    s = (line or "").strip()
+                    if not s:
+                        return False
+                    if s.startswith("(") and s.endswith(")"):
+                        return False
+                    s = re.sub(r"^[^A-Za-zÅÄÖåäö]+", "", s).strip()
+                    return (
+                        re.match(
+                            r"(?i)^(stek\w*|tillsätt\w*|strö\w*|servera\w*|lägg\w*|häll\w*|ringla\w*|toppa\w*|bland\w*|visp\w*|rör\w*|kok\w*|låt\w*|hack\w*|skär\w*|sätt\w*|form\w*|smak\w*|bryn\w*)\b",
+                            s,
+                        )
+                        is not None
+                    )
+
                 norm_ing = _norm(parsed_ing)
                 norm_steps = _norm(parsed_steps)
-                if (len(norm_ing) >= 80 and norm_ing == norm_steps) or _looks_like_steps_block(parsed_ing):
-                    logger.info(
-                        "Instagram caption parse produced step-like ingredients; keeping ingredients empty and allowing OCR overwrite (source_url=%s)",
-                        source_url,
-                    )
+                step_like_ing = (len(norm_ing) >= 80 and norm_ing == norm_steps) or _looks_like_steps_block(parsed_ing)
+                if step_like_ing:
+                    ing_lines = _split_lines(parsed_ing)
+                    filtered_lines: list[str] = []
+                    for ln in ing_lines:
+                        # Preserve subsection headings and obvious ingredient lines.
+                        if _looks_like_ingredient_line(ln):
+                            filtered_lines.append(ln)
+                            continue
+                        # Keep short non-step lines (sometimes ingredients have no units).
+                        if len(ln) <= 40 and not _looks_like_step_line(ln):
+                            filtered_lines.append(ln)
+
+                    salvaged = "\n".join(filtered_lines).strip()
+                    if salvaged:
+                        logger.info(
+                            "Instagram caption parse produced step-like ingredients; salvaged %s ingredient lines (source_url=%s)",
+                            len(filtered_lines),
+                            source_url,
+                        )
+                        parsed_ing = salvaged
+                    else:
+                        logger.info(
+                            "Instagram caption parse produced step-like ingredients; no ingredient lines to salvage (source_url=%s)",
+                            source_url,
+                        )
+                        parsed_ing = ""
+
                     caption_ingredients_duplicate_steps = True
 
             if parsed_ing and not caption_ingredients_duplicate_steps:
