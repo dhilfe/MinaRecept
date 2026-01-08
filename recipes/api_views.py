@@ -355,10 +355,27 @@ class RecipeViewSet(OwnedModelViewSet):
                 s = re.sub(r"^[^A-Za-zÅÄÖåäö]+", "", s).strip()
                 # Common Swedish cooking verbs at the beginning of a step.
                 # This is more reliable than length heuristics (ingredients can be long too).
-                return re.match(
-                    r"(?i)^(stek|tillsätt|strö|servera|lägg|häll|ringla|toppa|blanda|vispa|rör|koka|låt|hacka|skär|sätt|forma|smaka|bryn)\b",
+                if re.match(
+                    r"(?i)^(stek\w*|tillsätt\w*|strö\w*|servera\w*|lägg\w*|häll\w*|ringla\w*|toppa\w*|bland\w*|visp\w*|rör\w*|kok\w*|låt\w*|hack\w*|skär\w*|sätt\w*|form\w*|smak\w*|bryn\w*)\b",
                     s,
-                ) is not None
+                ) is not None:
+                    return True
+
+                # Also treat long instruction-like sentences as steps even if they don't start with a verb.
+                # This captures patterns like "I en skål blandar du ...".
+                if len(s) >= 60 and (
+                    "." in s
+                    or "!" in s
+                    or "?" in s
+                    or re.search(r"(?i)\b(min|minuter|grader|°c)\b", s)
+                ):
+                    if re.search(
+                        r"(?i)\b(stek\w*|tillsätt\w*|strö\w*|servera\w*|lägg\w*|häll\w*|ringla\w*|toppa\w*|bland\w*|visp\w*|rör\w*|kok\w*|låt\w*|hack\w*|skär\w*|sätt\w*|form\w*|smak\w*|bryn\w*)\b",
+                        s,
+                    ):
+                        return True
+
+                return False
 
             def is_numbered_step_line(line: str) -> bool:
                 """Detect step lines that start with numbering.
@@ -837,7 +854,7 @@ class RecipeViewSet(OwnedModelViewSet):
                     for ln in lines:
                         candidate = re.sub(r"^[^A-Za-zÅÄÖåäö]+", "", ln).strip()
                         if re.match(
-                            r"(?i)^(stek|tillsätt|strö|servera|lägg|häll|ringla|toppa|blanda|vispa|rör|koka|låt|hacka|skär|sätt|forma|smaka|bryn)\b",
+                            r"(?i)^(stek\w*|tillsätt\w*|strö\w*|servera\w*|lägg\w*|häll\w*|ringla\w*|toppa\w*|bland\w*|visp\w*|rör\w*|kok\w*|låt\w*|hack\w*|skär\w*|sätt\w*|form\w*|smak\w*|bryn\w*)\b",
                             candidate,
                         ):
                             step_like += 1

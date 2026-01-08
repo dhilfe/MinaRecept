@@ -640,3 +640,42 @@ Sås:
         self.assertIn("Stek biffarna", data["steps"])
         self.assertIn("Tillsätt grädde", data["steps"])
 
+
+    @patch("recipes.ocr_service.ImageRecipeParser")
+    def test_import_image_instagram_steps_not_starting_with_verb_are_not_added_to_ingredients(self, mock_parser_cls):
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {}
+
+        caption = """
+PANNBIFF I LÖKSÅS
+
+Biffar:
+500 g färs
+1 ägg
+
+Sås:
+2 gula lökar
+2 dl grädde
+
+I en stekpanna på medelvärme bryner du biffarna och låter dem gå klart i 175 grader i ugnen.
+Sedan blandar du ner grädde och soja och låter allt puttra i 5 minuter.
+"""
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "source_url": "https://www.instagram.com/reel/NOVERB/", "source_text": caption},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertIn("500 g färs", data["ingredients"])
+        self.assertIn("2 dl grädde", data["ingredients"])
+        self.assertNotIn("I en stekpanna", data["ingredients"])
+        self.assertNotIn("Sedan blandar du", data["ingredients"])
+        self.assertIn("I en stekpanna", data["steps"])
+        self.assertIn("Sedan blandar du", data["steps"])
+
