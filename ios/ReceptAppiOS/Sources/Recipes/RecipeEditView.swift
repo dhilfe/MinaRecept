@@ -7,6 +7,7 @@ struct RecipeEditView: View {
 
     private let recipeId: Int
     private let initialDishType: String
+        private let initialTags: String
     private let onSaved: (RecipeDTO) -> Void
 
     @State private var title: String
@@ -15,6 +16,7 @@ struct RecipeEditView: View {
     @State private var steps: String
     @State private var cookingTimeMinutesText: String
     @State private var dishType: String
+        @State private var tags: String
 
     @State private var isSaving = false
     @State private var errorMessage: String? = nil
@@ -23,6 +25,7 @@ struct RecipeEditView: View {
         self.recipeId = recipe.id
         self.initialDishType = recipe.dishType ?? "lunch_dinner"
         self.onSaved = onSaved
+            self.initialTags = recipe.tags ?? ""
 
         _title = State(initialValue: recipe.title)
         _description = State(initialValue: recipe.description ?? "")
@@ -30,6 +33,7 @@ struct RecipeEditView: View {
         _steps = State(initialValue: recipe.steps ?? "")
         _cookingTimeMinutesText = State(initialValue: (recipe.cookingTime.map(String.init) ?? ""))
         _dishType = State(initialValue: recipe.dishType ?? "lunch_dinner")
+            _tags = State(initialValue: recipe.tags ?? "")
     }
 
     var body: some View {
@@ -47,6 +51,13 @@ struct RecipeEditView: View {
 
                     TextField("Tid (minuter)", text: $cookingTimeMinutesText)
                         .keyboardType(.numberPad)
+
+                        TextField("Taggar (kommaseparerade)", text: $tags)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled(true)
+                        Text("Ex: middag, snabbt, vegetariskt")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                 }
 
                 Section("Beskrivning") {
@@ -136,6 +147,12 @@ struct RecipeEditView: View {
             // still allow explicitly setting, but safe to omit.
         }
 
+            let normalizedTags = normalizeTags(tags)
+            let normalizedInitialTags = normalizeTags(initialTags)
+            if normalizedTags != normalizedInitialTags {
+                fields["tags"] = normalizedTags
+            }
+
         do {
             let updated = try await APIClient.shared.updateRecipe(id: recipeId, fields: fields, token: token)
             onSaved(updated)
@@ -144,5 +161,22 @@ struct RecipeEditView: View {
             errorMessage = APIError.userFacingMessage(for: error)
         }
     }
+
+        private func normalizeTags(_ input: String) -> String {
+            let raw = input
+                .split(separator: ",")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+
+            var seen: Set<String> = []
+            var out: [String] = []
+            for tag in raw {
+                let key = tag.lowercased()
+                if seen.contains(key) { continue }
+                seen.insert(key)
+                out.append(tag)
+            }
+            return out.joined(separator: ", ")
+        }
 }
 
