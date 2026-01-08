@@ -807,6 +807,48 @@ class RecipeViewSet(OwnedModelViewSet):
             if desc_extra and not description:
                 description = desc_extra
 
+        # Instagram + caption optimization can leave us with missing sections
+        # when the caption doesn't include ingredients/steps but the uploaded image does.
+        # Only attempt OCR fallback if an API key is configured (avoid mock data).
+        if is_instagram and source_text and (not ingredients or not steps):
+            try:
+                from .ocr_service import ImageRecipeParser
+
+                parser = ImageRecipeParser()
+                if not getattr(parser, "api_key", None):
+                    logger.info(
+                        "Instagram image import OCR fallback skipped (OPENAI_API_KEY missing; source_url=%s)",
+                        source_url,
+                    )
+                else:
+                    logger.info(
+                        "Instagram image import OCR fallback start (source_url=%s need_ingredients=%s need_steps=%s)",
+                        source_url,
+                        bool(not ingredients),
+                        bool(not steps),
+                    )
+                    try:
+                        image_file.seek(0)
+                    except Exception:
+                        pass
+                    parsed = parser.parse_image(image_file)
+                    if isinstance(parsed, dict):
+                        ocr_ingredients = (parsed.get("ingredients") or "").strip()
+                        ocr_steps = (parsed.get("steps") or "").strip()
+                        # Fill only missing fields; keep caption-derived content when present.
+                        if ocr_ingredients and not ingredients:
+                            ingredients = ocr_ingredients
+                        if ocr_steps and not steps:
+                            steps = ocr_steps
+                        logger.info(
+                            "Instagram image import OCR fallback done (source_url=%s filled_ingredients=%s filled_steps=%s)",
+                            source_url,
+                            bool(ocr_ingredients and ingredients),
+                            bool(ocr_steps and steps),
+                        )
+            except Exception:
+                logger.exception("Instagram image import OCR fallback failed (non-fatal)")
+
         # Append source URL line for traceability (requested UX).
         if source_url:
             line = f"Originalreceptet är från {source_url}"

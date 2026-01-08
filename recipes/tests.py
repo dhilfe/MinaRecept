@@ -619,6 +619,56 @@ class ApiTests(TestCase):
         self.assertIn('Blanda', created.steps)
         # Source line should use canonical URL (no igsh query)
         self.assertIn('Originalreceptet är från https://www.instagram.com/reel/DLQXLAUugPn/', created.description)
+
+    @patch('recipes.ocr_service.ImageRecipeParser')
+    @patch('recipes.importing.requests.get')
+    def test_import_recipe_api_instagram_ocr_fallback_when_caption_has_no_ingredients(self, mock_get, mock_parser_cls):
+        page_resp = MagicMock()
+        page_resp.raise_for_status.return_value = None
+        html = """
+        <html>
+        <head>
+            <title>Instagram</title>
+            <meta property="og:title" content="TestUser on Instagram: &quot;Biffar med löksås&quot;" />
+            <meta property="og:description" content="TestUser on Instagram: &quot;Biffar med löksås\n\nStek biffarna tills de är genomstekta.\nTillsätt buljong och vatten.\nServera.&quot;" />
+            <meta property="og:image" content="https://example.com/recipeframe.png" />
+        </head>
+        <body></body>
+        </html>
+        """
+        page_resp.content = html.encode('utf-8')
+
+        img_resp = MagicMock()
+        img_resp.raise_for_status.return_value = None
+        img_resp.content = b'fake png bytes'
+        img_resp.headers = {'Content-Type': 'image/png'}
+
+        mock_get.side_effect = [page_resp, img_resp]
+
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.api_key = 'test-key'
+        mock_parser.parse_image.return_value = {
+            'title': '',
+            'description': '',
+            'ingredients': '1 kg blandfärs\n1 gul lök',
+            'steps': '',
+            'cooking_time': 0,
+            'servings': 4,
+        }
+
+        self._auth1()
+        response = self.client_api.post(
+            '/api/recipes/import/',
+            {
+                'url': 'https://www.instagram.com/reel/ABC/',
+                'dish_type': 'dessert',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+        created = Recipe.objects.get(id=response.data['id'])
+        self.assertIn('blandfärs', created.ingredients.lower())
+        self.assertIn('gul lök', created.ingredients.lower())
         self.assertNotIn('igsh=', created.description)
 
     @patch('recipes.importing.requests.get')

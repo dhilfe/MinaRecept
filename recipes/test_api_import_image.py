@@ -215,6 +215,51 @@ class ImportImageAPITests(TestCase):
         self.assertIn("600 gr flankstek", data["ingredients"])
         self.assertIn("Blanda ihop", data["steps"])
 
+
+    @patch("recipes.ocr_service.ImageRecipeParser")
+    def test_import_image_instagram_caption_missing_ingredients_uses_ocr_fallback_when_api_key_present(
+        self, mock_parser_cls
+    ):
+        mock_parser = mock_parser_cls.return_value
+        # Simulate a real OCR-capable environment (avoid mock parser behavior).
+        mock_parser.api_key = "test-key"
+        mock_parser.parse_image.return_value = {
+            "title": "",
+            "description": "",
+            "ingredients": "1 kg blandfärs\n1 gul lök",
+            "steps": "",
+            "cooking_time": 0,
+            "servings": 4,
+        }
+
+        caption_steps_only = (
+            "Stek biffarna antingen tills de är genomstekta, eller ge dom bara färg i stekpannan och låt dom sen steka klart I ugnen i 175 grader - dom ska ha en innertemperatur på 70 grader.\n"
+            "Stek löken på medelvärme i en klick smör i ca 5 min- direkt i stekpannan där biffarna brynts.\n"
+            "Strö över socker och låt steka ytterligare 5 min.\n"
+            "Tillsätt buljongen och vattnet. Låt koka 5 minuter.\n"
+            "Tillsätt grädde och soja och koka kraftigt i 5 minuter till. Smaka upp med salt och vitpeppar.\n"
+            "Servera biffarna i såsen eller med såsen brevid.\n"
+        )
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.png"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={
+                "image": img,
+                "source_url": "https://www.instagram.com/reel/ABC/",
+                "source_text": caption_steps_only,
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        # Ingredients should come from OCR fallback.
+        self.assertIn("blandfärs", data["ingredients"].lower())
+        self.assertIn("gul lök", data["ingredients"].lower())
+
     @patch("recipes.ocr_service.ImageRecipeParser")
     def test_import_image_extracts_hashtags_from_instagram_caption(self, mock_parser_cls):
         mock_parser = mock_parser_cls.return_value

@@ -1520,6 +1520,107 @@ def import_recipe_from_html(url: str, content: bytes, source_text: str | None = 
             if cap_desc and not description:
                 description = cap_desc
 
+        # If caption parsing didn't yield both ingredients and steps, try OCR on the best available image.
+        # Only runs when an OpenAI key is configured (avoid mock data).
+        # Heuristic guard: only do this when the caption looks recipe-like to avoid unnecessary OCR.
+        def _looks_like_recipe_caption(text: str) -> bool:
+            import re
+
+            s = (text or '').strip().lower()
+            if not s:
+                return False
+            # Strong signal: explicit section markers.
+            if 'ingredien' in s or 'gör så' in s or 'gor sa' in s:
+                return True
+            # Otherwise look for common Swedish cooking verbs / temps.
+            if re.search(r"\b(stek|tillsätt|strö|servera|lägg|häll|ringla|toppa|blanda|vispa|rör|koka|låt|hacka|skär|sätt|forma|smaka|bryn)\b", s):
+                return True
+            if re.search(r"\b\d+\s*(?:°|grader|c)\b", s):
+                return True
+            return False
+
+        needs_structured = bool(not ingredients or not steps)
+        if caption and image_url and needs_structured and not _looks_like_recipe_caption(caption):
+            try:
+                logger.info(
+                    "Instagram OCR fallback skipped (caption not recipe-like; url=%s image_url=%s caption_len=%s)",
+                    url,
+                    image_url,
+                    len(caption or ''),
+                )
+            except Exception:
+                pass
+
+        if caption and image_url and needs_structured and _looks_like_recipe_caption(caption):
+            try:
+                from io import BytesIO
+                from .ocr_service import ImageRecipeParser
+
+                parser = ImageRecipeParser()
+                if not getattr(parser, "api_key", None):
+                    try:
+                        logger.info(
+                            "Instagram OCR fallback skipped (OPENAI_API_KEY missing; url=%s image_url=%s)",
+                            url,
+                            image_url,
+                        )
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        logger.info(
+                            "Instagram OCR fallback start (url=%s image_url=%s need_ingredients=%s need_steps=%s)",
+                            url,
+                            image_url,
+                            bool(not ingredients),
+                            bool(not steps),
+                        )
+                    except Exception:
+                        pass
+                    proxies, ua = _instagram_request_config()
+                    img_resp = requests.get(
+                        image_url,
+                        headers={"User-Agent": ua, "Accept": "image/*,*/*;q=0.8"},
+                        proxies=proxies,
+                        timeout=10,
+                    )
+                    img_resp.raise_for_status()
+
+                    img_bytes = getattr(img_resp, "content", b"") or b""
+                    if len(img_bytes) <= 8 * 1024 * 1024:
+                        f = BytesIO(img_bytes)
+                        f.name = "instagram_image"
+                        try:
+                            ct = (getattr(img_resp, "headers", {}) or {}).get("Content-Type", "")
+                            f.content_type = ct
+                        except Exception:
+                            pass
+
+                        ocr = parser.parse_image(f)
+                        if isinstance(ocr, dict):
+                            ocr_ing = (ocr.get("ingredients") or "").strip()
+                            ocr_steps = (ocr.get("steps") or "").strip()
+                            filled_any = False
+                            if ocr_ing and not ingredients:
+                                ingredients = [ln.strip() for ln in ocr_ing.splitlines() if ln.strip()]
+                                filled_any = True
+                            if ocr_steps and not steps:
+                                steps = [ln.strip() for ln in ocr_steps.splitlines() if ln.strip()]
+                                filled_any = True
+
+                            try:
+                                logger.info(
+                                    "Instagram OCR fallback done (url=%s filled_any=%s ingredients_lines=%s steps_lines=%s)",
+                                    url,
+                                    filled_any,
+                                    len(ingredients or []),
+                                    len(steps or []),
+                                )
+                            except Exception:
+                                pass
+            except Exception as e:
+                logger.warning("Instagram OCR fallback failed (%s)", e)
+
         # As a fallback, keep the caption as description so the user gets *something*.
         if not description and caption:
             description = caption
