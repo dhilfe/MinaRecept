@@ -324,6 +324,7 @@ class RecipeViewSet(OwnedModelViewSet):
         servings = safe_int(data.get("servings"), default=4)
 
         caption_ingredients_duplicate_steps = False
+        caption_ingredients_salvaged = False
 
         def parse_caption_to_recipe(text: str) -> tuple[str, str, str]:
             """
@@ -842,8 +843,13 @@ class RecipeViewSet(OwnedModelViewSet):
                         return True
                     if re.match(r"^\s*\d+\s*(?:-\s*\d+)?\s*(?:tsk|msk)\b", s):
                         return True
-                    # Common patterns like "Salt & peppar" or "Salt och peppar"
-                    if "&" in s or " och " in s:
+                    # Common patterns like "salt & peppar" / "salt och peppar".
+                    if ("&" in s or " och " in s) and re.search(r"(?i)\b(salt|peppar|vitpeppar|svartpeppar|socker)\b", s):
+                        if re.search(
+                            r"(?i)\b(stek\w*|tillsätt\w*|strö\w*|servera\w*|lägg\w*|häll\w*|ringla\w*|toppa\w*|bland\w*|visp\w*|rör\w*|kok\w*|låt\w*|hack\w*|skär\w*|sätt\w*|form\w*|smak\w*|bryn\w*)\b",
+                            s,
+                        ):
+                            return False
                         return True
                     return False
 
@@ -900,6 +906,7 @@ class RecipeViewSet(OwnedModelViewSet):
                             source_url,
                         )
                         parsed_ing = salvaged
+                        caption_ingredients_salvaged = True
                     else:
                         logger.info(
                             "Instagram caption parse produced step-like ingredients; no ingredient lines to salvage (source_url=%s)",
@@ -909,7 +916,7 @@ class RecipeViewSet(OwnedModelViewSet):
 
                     caption_ingredients_duplicate_steps = True
 
-            if parsed_ing and not caption_ingredients_duplicate_steps:
+            if parsed_ing and (not caption_ingredients_duplicate_steps or caption_ingredients_salvaged):
                 ingredients = parsed_ing
             if parsed_steps:
                 steps = parsed_steps
