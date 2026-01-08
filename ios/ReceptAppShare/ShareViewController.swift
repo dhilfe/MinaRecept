@@ -174,7 +174,7 @@ class ShareViewController: SLComposeServiceViewController {
         // which can behave differently than server-side scraping.
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = 12
+        request.timeoutInterval = 5
         request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
         request.setValue("sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7", forHTTPHeaderField: "Accept-Language")
         // iOS Safari-ish UA to reduce bot-style responses.
@@ -230,7 +230,7 @@ class ShareViewController: SLComposeServiceViewController {
     private func fetchImage(from url: URL, completion: @escaping (UIImage?) -> Void) {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = 12
+        request.timeoutInterval = 5
         request.setValue("image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
         request.setValue(
             "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
@@ -603,7 +603,45 @@ class ShareViewController: SLComposeServiceViewController {
         }
 
         // Default: if we already found a URL, use it.
+        // Special-case Instagram: server-side scraping is unreliable; prefer on-device OG preview + thumbnail -> import-image.
         if let url = preflightURL {
+            if let host = url.host?.lowercased(), host.contains("instagram.com") {
+                self.debugNotice("[DEBUG] Instagram URL found in preflight; fetching IG preview HTML for OG tags.")
+                self.fetchInstagramPreview(from: url) { [weak self] preview in
+                    guard let self else { return }
+                    if didFinish { return }
+
+                    let previewCaption = preview?.captionText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let sourceText = !previewCaption.isEmpty ? previewCaption : preflightText
+
+                    guard let thumbnailURL = preview?.thumbnailURL else {
+                        self.debugNotice("[DEBUG] IG preview missing thumbnail; falling back to URL import")
+                        DispatchQueue.main.async {
+                            finishOnce { self.uploadURL(url, sourceText: sourceText) }
+                        }
+                        return
+                    }
+
+                    self.debugNotice("[DEBUG] IG preview thumbnail: \(thumbnailURL.absoluteString)")
+                    self.fetchImage(from: thumbnailURL) { [weak self] image in
+                        guard let self else { return }
+                        if didFinish { return }
+                        guard let image else {
+                            self.debugNotice("[DEBUG] IG preview thumbnail download failed; falling back to URL import")
+                            DispatchQueue.main.async {
+                                finishOnce { self.uploadURL(url, sourceText: sourceText) }
+                            }
+                            return
+                        }
+                        let inferredTitle = self.bestEffortTitleForImageImport(suggestedName: nil, item: nil)
+                        DispatchQueue.main.async {
+                            finishOnce { self.uploadImage(image, title: inferredTitle, sourceURL: url, sourceText: sourceText) }
+                        }
+                    }
+                }
+                return
+            }
+
             self.debugNotice("[DEBUG] Found URL in preflight text (len=\(preflightText.count)).")
             finishOnce { self.uploadURL(url, sourceText: preflightText) }
             return
@@ -1402,6 +1440,24 @@ class ShareViewController: SLComposeServiceViewController {
     }
 
     private func uploadImage(_ image: UIImage, title: String, sourceURL: URL? = nil, sourceText: String? = nil) {
+        func downscaleIfNeeded(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+            let originalSize = image.size
+            guard originalSize.width > 0, originalSize.height > 0 else { return image }
+
+            let longestSide = max(originalSize.width, originalSize.height)
+            guard longestSide > maxDimension else { return image }
+
+            let scale = maxDimension / longestSide
+            let targetSize = CGSize(width: floor(originalSize.width * scale), height: floor(originalSize.height * scale))
+
+            let format = UIGraphicsImageRendererFormat.default()
+            format.scale = 1
+            let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
+            return renderer.image { _ in
+                image.draw(in: CGRect(origin: .zero, size: targetSize))
+            }
+        }
+
         let pixelWidth = Int(image.size.width * image.scale)
         let pixelHeight = Int(image.size.height * image.scale)
         shareLogger.info("Shared image size: \(pixelWidth)x\(pixelHeight)px (scale=\(image.scale))")
@@ -1417,14 +1473,28 @@ class ShareViewController: SLComposeServiceViewController {
             return
         }
 
+        let isInstagramSource = (sourceURL?.host?.lowercased().contains("instagram.com") == true)
+        let imageForUpload = isInstagramSource ? downscaleIfNeeded(image, maxDimension: 1280) : image
+
         // Prefer PNG (lossless) for text screenshots when reasonably sized.
+        // For Instagram thumbnails (photo-like), PNG can be much larger/slower than JPEG.
         let payload: ImageUpload?
-        if let png = image.pngData(), png.count <= 8_000_000 {
-            payload = .png(png)
-        } else if let jpeg = image.jpegData(compressionQuality: 0.95) {
-            payload = .jpeg(jpeg)
+        if isInstagramSource {
+            if let jpeg = imageForUpload.jpegData(compressionQuality: 0.85) {
+                payload = .jpeg(jpeg)
+            } else if let png = imageForUpload.pngData(), png.count <= 8_000_000 {
+                payload = .png(png)
+            } else {
+                payload = nil
+            }
         } else {
-            payload = nil
+            if let png = imageForUpload.pngData(), png.count <= 8_000_000 {
+                payload = .png(png)
+            } else if let jpeg = imageForUpload.jpegData(compressionQuality: 0.95) {
+                payload = .jpeg(jpeg)
+            } else {
+                payload = nil
+            }
         }
 
         guard let payload else {

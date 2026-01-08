@@ -428,3 +428,39 @@ Servera biffarna i såsen eller med såsen brevid.
         # Make sure steps don't contain \n escapes (should be split by lines)
         self.assertNotIn("\\n", data["steps"])
 
+
+    @patch("recipes.ocr_service.ImageRecipeParser")
+    def test_import_image_does_not_put_numbered_steps_in_ingredients_without_heading(self, mock_parser_cls):
+        """If caption has numbered steps but no explicit 'Gör så här' heading, steps must not be duplicated into ingredients."""
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_image.return_value = {}
+
+        caption = """
+Tomatsallad
+Ingredienser:
+2 tomater
+1 msk olivolja
+1. Skär tomaterna i klyftor.
+2. Blanda med olivolja och salt.
+"""
+
+        img = BytesIO(b"fake image data")
+        img.name = "test.jpg"
+
+        resp = self.client.post(
+            "/api/recipes/import-image/",
+            data={"image": img, "source_url": "https://www.instagram.com/reel/NOHEADING/", "source_text": caption},
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+
+        self.assertIn("2 tomater", data["ingredients"])
+        self.assertIn("1 msk olivolja", data["ingredients"])
+        self.assertNotIn("Skär tomaterna", data["ingredients"])
+        self.assertNotIn("Blanda med olivolja", data["ingredients"])
+
+        self.assertIn("Skär tomaterna", data["steps"])
+        self.assertIn("Blanda med olivolja", data["steps"])
+

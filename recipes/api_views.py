@@ -273,6 +273,10 @@ class RecipeViewSet(OwnedModelViewSet):
         source_url = (request.data.get("source_url") or "").strip()
         source_text = (request.data.get("source_text") or "").strip()
 
+        # Performance: for Instagram shares we often already have the full caption (source_text).
+        # In that case OCR is low-signal (thumbnail image) and can add seconds of latency.
+        is_instagram = "instagram.com" in (source_url or "").lower()
+
         def safe_int(value, default: int) -> int:
             """
             Best-effort int conversion for OCR output.
@@ -299,17 +303,18 @@ class RecipeViewSet(OwnedModelViewSet):
                 return default
 
         data: dict = {}
-        try:
-            from .ocr_service import ImageRecipeParser
+        if not (is_instagram and source_text):
+            try:
+                from .ocr_service import ImageRecipeParser
 
-            parser = ImageRecipeParser()
-            parsed = parser.parse_image(image_file)
-            if isinstance(parsed, dict):
-                data = parsed
-        except Exception:
-            # Never fail hard here: Share Extension expects a 201 for good UX.
-            logger.exception("Image import OCR failed (will create placeholder recipe)")
-            data = {}
+                parser = ImageRecipeParser()
+                parsed = parser.parse_image(image_file)
+                if isinstance(parsed, dict):
+                    data = parsed
+            except Exception:
+                # Never fail hard here: Share Extension expects a 201 for good UX.
+                logger.exception("Image import OCR failed (will create placeholder recipe)")
+                data = {}
 
         title = (data.get("title") or "").strip()
         description = (data.get("description") or "").strip()
@@ -336,6 +341,23 @@ class RecipeViewSet(OwnedModelViewSet):
             lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
             if not lines:
                 return "", "", ""
+
+            def looks_like_step_line(line: str) -> bool:
+                s = (line or "").strip()
+                if not s:
+                    return False
+                if s.startswith("(") and s.endswith(")"):
+                    return False
+                # Common Swedish cooking verbs at the beginning of a step.
+                # This is more reliable than length heuristics (ingredients can be long too).
+                return re.match(
+                    r"(?i)^(stek|tillsätt|strö|servera|lägg|häll|ringla|toppa|blanda|vispa|rör|koka|låt|hacka|skär|sätt|forma|smaka|bryn)\b",
+                    s,
+                ) is not None
+
+            def is_numbered_step_line(line: str) -> bool:
+                # NOTE: avoid treating ingredient quantities like "1-2 tsk" as steps.
+                return re.match(r"^\s*\d+\s*[.)]\s*\S+", (line or "").strip()) is not None
 
             def is_heading(line: str) -> bool:
                 l = line.strip()
@@ -418,9 +440,8 @@ class RecipeViewSet(OwnedModelViewSet):
                         continue
                     
                     s = ln.strip()
-                    # If this is ingredient section after "Recept:" and line is long (>40 chars or >5 words),
-                    # treat it as the start of steps instead.
-                    if is_ingredient_section and (len(s) > 40 or len(s.split()) > 5):
+                    # If this is ingredient section after "Recept:", stop when we hit step-like lines.
+                    if is_ingredient_section and looks_like_step_line(s):
                         break
                     
                     # strip bullet markers
@@ -556,9 +577,14 @@ class RecipeViewSet(OwnedModelViewSet):
                     if is_heading(ln):
                         break
 
+                    # If we hit numbered steps (common when the caption has no explicit "Gör så här" heading),
+                    # stop collecting ingredients so steps don't end up duplicated under Ingredienser.
+                    if is_numbered_step_line(ln):
+                        break
+
                     s = ln.strip()
-                    # Stop if we hit a long sentence (likely a step, not ingredient)
-                    if len(s) > 40 or (len(s.split()) > 5):
+                    # Stop if we hit a step-like line (likely a step, not ingredient)
+                    if looks_like_step_line(s):
                         break
 
                     s = re.sub(r"^[-•*]+\\s*", "", s).strip()
@@ -583,7 +609,7 @@ class RecipeViewSet(OwnedModelViewSet):
                     if ln.strip().endswith(":"):
                         continue
                     s = ln.strip()
-                    if s and (len(s) > 40 or len(s.split()) > 5):
+                    if looks_like_step_line(s):
                         step_start_idx = i
                         break
 
@@ -688,7 +714,6 @@ class RecipeViewSet(OwnedModelViewSet):
         # If source_url is Instagram and we have source_text, prefer it over OCR output.
         # This avoids the common case where OCR returns mock/placeholder ingredients/steps
         # (e.g. when OPENAI_API_KEY is missing) and blocks caption parsing.
-        is_instagram = "instagram.com" in (source_url or "").lower()
         if source_text and is_instagram:
             parsed_ing, parsed_steps, desc_extra = parse_caption_to_recipe(source_text)
 
