@@ -8,6 +8,28 @@ private struct InstagramPreview {
     let thumbnailURL: URL?
 }
 
+private final class ShareTiming {
+    private let start = Date()
+    private let queue = DispatchQueue(label: "se.enklagrejer.minarecept.share.timing")
+    private var marks: [(label: String, t: TimeInterval)] = []
+
+    func mark(_ label: String) {
+        let now = Date()
+        queue.sync {
+            marks.append((label: label, t: now.timeIntervalSince(start)))
+        }
+    }
+
+    func summary() -> String {
+        queue.sync {
+            guard !marks.isEmpty else { return "(no marks)" }
+            return marks
+                .map { m in "\(m.label)=\(Int((m.t * 1000.0).rounded()))ms" }
+                .joined(separator: " ")
+        }
+    }
+}
+
 private let shareLogger = Logger(subsystem: "se.enklagrejer.minarecept.share", category: "Share")
 
 private enum AppGroupConfig {
@@ -21,6 +43,7 @@ class ShareViewController: SLComposeServiceViewController {
     private var didAutoGuessDishType = false
     private var sharedURL: URL?
     private var customTags: String = ""
+    private var timing: ShareTiming?
 
     private func debugDumpIncomingAttachments(context: String) {
 #if !DEBUG
@@ -190,7 +213,7 @@ class ShareViewController: SLComposeServiceViewController {
 
         session.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }
-            if let error {
+                if let error = error {
                 self.debugNotice("[DEBUG] IG preview fetch failed: \(String(describing: error))")
                 completion(nil)
                 return
@@ -233,6 +256,7 @@ class ShareViewController: SLComposeServiceViewController {
         request.httpMethod = "GET"
         request.timeoutInterval = 5
         request.setValue("image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        timing?.mark("thumbFetchStart")
         request.setValue(
             "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
             forHTTPHeaderField: "User-Agent"
@@ -244,6 +268,7 @@ class ShareViewController: SLComposeServiceViewController {
 
         session.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }
+            defer { self.timing?.mark("thumbFetchDone") }
             if let error {
                 self.debugNotice("[DEBUG] fetchImage failed: \(String(describing: error))")
                 completion(nil)
@@ -438,6 +463,8 @@ class ShareViewController: SLComposeServiceViewController {
     override func presentationAnimationDidFinish() {
         super.presentationAnimationDidFinish()
 
+        timing?.mark("previewShown")
+
         // Safari often pre-fills the compose text with the page title, e.g. "Chokladbollar | Recept ICA.se".
         // Trim everything after the first pipe to avoid manual cleanup.
         if let current = self.textView.text, !current.isEmpty {
@@ -460,6 +487,11 @@ class ShareViewController: SLComposeServiceViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+
+        let t = ShareTiming()
+        t.mark("viewDidLoad")
+        self.timing = t
+
         self.debugNotice("[DEBUG] ShareViewController.viewDidLoad")
         self.debugDumpIncomingAttachments(context: "viewDidLoad")
     }
@@ -468,6 +500,7 @@ class ShareViewController: SLComposeServiceViewController {
         // This is called after the user selects Post. Do the upload of contentText and/or NSExtensionContext attachments.
 
         self.debugNotice("[DEBUG] ShareViewController.didSelectPost")
+        timing?.mark("postTapped")
         
         guard let extensionItems = extensionContext?.inputItems as? [NSExtensionItem] else {
             self.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
@@ -575,6 +608,7 @@ class ShareViewController: SLComposeServiceViewController {
         self.debugNotice(
             "[DEBUG] preflightTextLen=\(preflightText.count) preflightURL=\(preflightURL?.absoluteString ?? "(none)") candidates=\(candidates.count)"
         )
+        timing?.mark("preflightDone")
 
         let hasPotentialImage = candidates.contains { c in
             c.provider.canLoadObject(ofClass: UIImage.self) || c.provider.registeredTypeIdentifiers.contains(where: { UTType($0)?.conforms(to: .image) == true })
@@ -614,8 +648,10 @@ class ShareViewController: SLComposeServiceViewController {
         if let url = preflightURL {
             if let host = url.host?.lowercased(), host.contains("instagram.com") {
                 self.debugNotice("[DEBUG] Instagram URL found in preflight; fetching IG preview HTML for OG tags.")
+                timing?.mark("igPreviewFetchStart")
                 self.fetchInstagramPreview(from: url) { [weak self] preview in
                     guard let self else { return }
+                    self.timing?.mark("igPreviewFetchDone")
                     if didFinish { return }
 
                     let previewCaption = preview?.captionText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1275,6 +1311,7 @@ class ShareViewController: SLComposeServiceViewController {
     }
     
     private func uploadURL(_ url: URL, sourceText: String?) {
+        timing?.mark("uploadURL_start")
         shareLogger.info("Attempting import for shared URL: \(url.absoluteString, privacy: .public)")
         // IMPORTANT: build the path with components to avoid encoding slashes ("recipes/import/")
         // and to ensure trailing slash (Django APPEND_SLASH redirects can break POST semantics).
@@ -1326,6 +1363,12 @@ class ShareViewController: SLComposeServiceViewController {
         
         let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
+
+            if let httpResponse = response as? HTTPURLResponse {
+                self.timing?.mark("uploadURL_response_\(httpResponse.statusCode)")
+            } else if error != nil {
+                self.timing?.mark("uploadURL_error")
+            }
 
             if let error = error {
                 if let urlError = error as? URLError {
@@ -1483,6 +1526,7 @@ class ShareViewController: SLComposeServiceViewController {
     }
 
     private func uploadImage(_ image: UIImage, title: String, sourceURL: URL? = nil, sourceText: String? = nil) {
+        timing?.mark("uploadImage_start")
         func downscaleIfNeeded(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
             let originalSize = image.size
             guard originalSize.width > 0, originalSize.height > 0 else { return image }
@@ -1622,6 +1666,12 @@ class ShareViewController: SLComposeServiceViewController {
         let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }
 
+            if let http = response as? HTTPURLResponse {
+                self.timing?.mark("uploadImage_response_\(http.statusCode)")
+            } else if error != nil {
+                self.timing?.mark("uploadImage_error")
+            }
+
             if let error {
                 shareLogger.error("Image upload error: \(String(describing: error), privacy: .public)")
                 self.debugNotice("[DEBUG] uploadImage error: \(String(describing: error))")
@@ -1660,6 +1710,7 @@ class ShareViewController: SLComposeServiceViewController {
     }
 
     private func openMainAppForImport(_ url: URL) {
+        timing?.mark("openMainAppFallback")
         // Open the main app via URL scheme and let it perform the import (it has Keychain auth).
         var components = URLComponents()
         components.scheme = "receptapp"
@@ -1673,6 +1724,10 @@ class ShareViewController: SLComposeServiceViewController {
         shareLogger.info("Falling back to open main app for import: \(deepLink.absoluteString, privacy: .public)")
         self.extensionContext?.open(deepLink, completionHandler: { _ in
             // Even if open fails, just close the extension to avoid hanging.
+            if let summary = self.timing?.summary() {
+                shareLogger.notice("[TIMING] \(summary, privacy: .public)")
+            }
+            self.timing = nil
             self.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
         })
     }
@@ -1712,6 +1767,10 @@ class ShareViewController: SLComposeServiceViewController {
         // Auto-dismiss (a bit longer so it's actually noticeable).
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             container.removeFromSuperview()
+            if let summary = self.timing?.summary() {
+                shareLogger.notice("[TIMING] \(summary, privacy: .public)")
+            }
+            self.timing = nil
             self.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
         }
     }
