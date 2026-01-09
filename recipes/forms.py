@@ -15,7 +15,7 @@ class RecipeForm(forms.ModelForm):
             'cooking_time': forms.NumberInput(attrs={'class': 'form-control', 'step': '5', 'style': 'width: 120px;'}),
             'difficulty': forms.Select(attrs={'class': 'form-select', 'style': 'width: 150px;'}),
             'dish_type': forms.Select(attrs={'class': 'form-select', 'style': 'width: 150px;'}),
-            'tags': forms.TextInput(attrs={'class': 'form-control'}),
+            'tags': forms.TextInput(attrs={'class': 'form-control', 'list': 'tag-list'}),
             'servings': forms.NumberInput(attrs={'class': 'form-control', 'style': 'width: 150px;'}),
             'image': forms.FileInput(attrs={'class': 'form-control'}),
             'is_favorite': forms.CheckboxInput(attrs={'class': 'form-check-input'}),

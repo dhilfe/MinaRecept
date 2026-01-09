@@ -64,11 +64,7 @@
                         {% else %}
                             <div class="mb-3">
                                 <label for="{{ field.id_for_label }}" class="form-label">{{ field.label }}</label>
-                                                                            {% if field.name == 'tags' %}
-                                                                                {{ field.as_widget(attrs={'list': 'tag-list'}) }}
-                                                                            {% else %}
-                                                                                {{ field }}
-                                                                            {% endif %}
+                                                                            {{ field }}
                                 {% if field.help_text %}
                                     <div class="form-text">{{ field.help_text }}</div>
                                 {% endif %}
