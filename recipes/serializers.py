@@ -75,6 +75,12 @@ class RecipeSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['user', 'created_at', 'updated_at']
 
+        extra_kwargs = {
+            # Some imports can produce noisy/incorrect instructions; allow users to clear
+            # and re-write the steps later without being blocked by DRF's blank validation.
+            'steps': {'allow_blank': True},
+        }
+
     def get_image_url(self, obj: Recipe):
         request = self.context.get('request')
         if not obj.image:

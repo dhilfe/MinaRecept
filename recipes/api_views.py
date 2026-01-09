@@ -273,6 +273,10 @@ class RecipeViewSet(OwnedModelViewSet):
 
         requested_tags = normalize_tags((request.data.get("tags") or "").strip())
 
+        # Always tag Instagram imports for easy filtering (requested feature).
+        if 'instagram.com' in url.lower():
+            requested_tags = normalize_tags(",".join([requested_tags, "instagram"]))
+
         recipe = Recipe.objects.create(
             user=request.user,
             title=imported.title,
@@ -1159,6 +1163,10 @@ class RecipeViewSet(OwnedModelViewSet):
 
         if requested_tags:
             extracted_tags = normalize_tags(",".join([extracted_tags, requested_tags]))
+
+        # Always tag Instagram imports for easy filtering (requested feature).
+        if is_instagram:
+            extracted_tags = normalize_tags(",".join([extracted_tags, "instagram"]))
 
         recipe = Recipe.objects.create(
             user=request.user,
