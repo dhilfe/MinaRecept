@@ -18,35 +18,32 @@ struct ShoppingListDetailView: View {
     var body: some View {
         List {
             if items.isEmpty && !isLoading {
-                Text("Inga rader ännu.")
-                    .foregroundStyle(.secondary)
+                EmptyStateView(
+                    iconName: "checklist",
+                    title: "Inga varor",
+                    message: "Lägg till en vara eller skicka från ett recept.",
+                    actionTitle: "Lägg till vara",
+                    action: {
+                        newItemName = ""
+                        newItemAmount = ""
+                        newItemUnit = ""
+                        showAddItemSheet = true
+                    }
+                )
             }
 
             ForEach(items) { item in
-                HStack(spacing: 12) {
-                    Image(systemName: item.checked ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(item.checked ? .green : .secondary)
-                        .onTapGesture {
-                            Task { await toggleItem(item) }
-                        }
-
-                    Text(itemDescription(item))
-                        .strikethrough(item.checked)
-                        .foregroundStyle(item.checked ? .secondary : .primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-
-                    Spacer()
-                }
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    Task { await toggleItem(item) }
-                }
+                ShoppingListItemRow(item: item)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        Task { await toggleItem(item) }
+                    }
             }
             .onDelete(perform: deleteItem)
         }
         .navigationTitle(list.name)
         .navigationBarTitleDisplayMode(.inline)
+        .listStyle(.insetGrouped)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 HStack {
@@ -235,5 +232,39 @@ struct ShoppingListDetailView: View {
         }
         
         return parts.joined(separator: " ")
+    }
+}
+
+private struct ShoppingListItemRow: View {
+    let item: ShoppingListItemDTO
+
+    private var amountLine: String? {
+        var parts: [String] = []
+        if let amount = item.amount, !amount.isEmpty { parts.append(amount) }
+        if let unit = item.unit, !unit.isEmpty { parts.append(unit) }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: item.checked ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(item.checked ? .green : .secondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name)
+                    .strikethrough(item.checked)
+                    .foregroundStyle(item.checked ? .secondary : .primary)
+
+                if let amountLine {
+                    Text(amountLine)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .strikethrough(item.checked)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
