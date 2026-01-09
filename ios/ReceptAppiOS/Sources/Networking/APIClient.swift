@@ -150,6 +150,98 @@ final class APIClient {
         }
     }
 
+    func fetchCookbooks(token: String) async throws -> [CookbookDTO] {
+        let url = try url("cookbooks/")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw APIError.network(error)
+        }
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+
+        if !(200...299).contains(http.statusCode) {
+            var message: String?
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let detail = json["detail"] as? String {
+                message = detail
+            }
+            throw APIError.httpStatus(http.statusCode, message)
+        }
+
+        do {
+            return try decoder.decode([CookbookDTO].self, from: data)
+        } catch {
+            throw APIError.decoding(error)
+        }
+    }
+
+    func createCookbook(name: String, token: String) async throws -> CookbookDTO {
+        let url = try url("cookbooks/")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = ["name": name]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw APIError.network(error)
+        }
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+
+        if !(200...299).contains(http.statusCode) {
+            var message: String?
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if let detail = json["detail"] as? String { message = detail }
+                if message == nil, let name = json["name"] {
+                    if let list = name as? [String], let first = list.first { message = first }
+                    if let str = name as? String { message = str }
+                }
+            }
+            throw APIError.httpStatus(http.statusCode, message)
+        }
+
+        do {
+            return try decoder.decode(CookbookDTO.self, from: data)
+        } catch {
+            throw APIError.decoding(error)
+        }
+    }
+
+    func addRecipeToCookbook(cookbookId: Int, recipeId: Int, token: String) async throws {
+        let url = try url("cookbooks/\(cookbookId)/add-recipe/")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = ["recipe_id": recipeId]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+
+        if !(200...299).contains(http.statusCode) {
+            var message: String?
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if let detail = json["detail"] as? String { message = detail }
+                if message == nil, let error = json["error"] as? String { message = error }
+            }
+            throw APIError.httpStatus(http.statusCode, message)
+        }
+    }
+
     func fetchRecipe(id: Int, token: String) async throws -> RecipeDTO {
         let url = try url("recipes/\(id)/")
         var request = URLRequest(url: url)
