@@ -13,6 +13,7 @@ struct ReceptAppiOSApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(session)
+                .preferredColorScheme(.light)
                 .onReceive(deepLinkStore.$pendingURL) { url in
                     guard let url else { return }
                     // Consume first to avoid duplicate handling.

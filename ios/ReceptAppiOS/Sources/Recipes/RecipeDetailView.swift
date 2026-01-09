@@ -302,7 +302,7 @@ struct RecipeDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
-                Task { await addToShoppingList() }
+                Task { await addSingleIngredientToShoppingList(text: text) }
             } label: {
                 Image(systemName: "cart.badge.plus")
                     .foregroundStyle(.secondary)
@@ -311,6 +311,27 @@ struct RecipeDetailView: View {
             .disabled(isLoading)
         }
         .padding(.vertical, 6)
+    }
+
+    private func addSingleIngredientToShoppingList(text: String) async {
+        guard let token = session.token else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            try await APIClient.shared.addSingleIngredientToShoppingList(
+                recipeId: recipe.id,
+                text: trimmed,
+                shoppingListId: nil,
+                token: token
+            )
+            showSuccessAlert = true
+        } catch {
+            errorMessage = APIError.userFacingMessage(for: error)
+        }
     }
 
     @ViewBuilder

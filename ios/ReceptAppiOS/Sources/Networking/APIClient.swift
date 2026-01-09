@@ -535,6 +535,35 @@ final class APIClient {
         guard (200...299).contains(http.statusCode) else { throw APIError.httpStatus(http.statusCode, nil) }
     }
 
+    func addSingleIngredientToShoppingList(recipeId: Int, text: String, shoppingListId: Int?, token: String) async throws {
+        let url = try url("recipes/\(recipeId)/add-ingredient-to-shopping-list/")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body = AddSingleIngredientToShoppingListRequest(shopping_list_id: shoppingListId, text: text)
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw APIError.network(error)
+        }
+
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        if !(200...299).contains(http.statusCode) {
+            var message: String?
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let detail = json["detail"] as? String {
+                message = detail
+            }
+            throw APIError.httpStatus(http.statusCode, message)
+        }
+    }
+
     func fetchWeeklyPlan(token: String) async throws -> [WeeklyPlanDTO] {
         let url = try url("weekly-plan/")
         var request = URLRequest(url: url)
@@ -750,4 +779,9 @@ private struct TokenResponse: Codable {
 
 private struct AddToShoppingListRequest: Codable {
     let shopping_list_id: Int?
+}
+
+private struct AddSingleIngredientToShoppingListRequest: Codable {
+    let shopping_list_id: Int?
+    let text: String
 }
