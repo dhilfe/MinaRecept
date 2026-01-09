@@ -9,6 +9,49 @@ struct CookbookRecipesView: View {
     @State private var isLoading: Bool = false
     @State private var errorMessage: String? = nil
 
+    private struct RecipeRow: View {
+        let recipe: RecipeDTO
+
+        var body: some View {
+            HStack(alignment: .top, spacing: 12) {
+                if let url = recipe.preferredImageURL {
+                    AsyncImage(url: url) { image in
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } placeholder: {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.secondary.opacity(0.15))
+                    }
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(.secondary.opacity(0.15))
+                    }
+                } else {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.secondary.opacity(0.10))
+                        .frame(width: 64, height: 64)
+                        .overlay {
+                            Image(systemName: "fork.knife")
+                                .foregroundStyle(.secondary)
+                        }
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(recipe.title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
     var body: some View {
         List {
             if recipes.isEmpty {
@@ -20,9 +63,7 @@ struct CookbookRecipesView: View {
                 Section {
                     ForEach(recipes.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }) { recipe in
                         NavigationLink(value: recipe) {
-                            Text(recipe.title)
-                                .foregroundStyle(.primary)
-                                .lineLimit(2)
+                            RecipeRow(recipe: recipe)
                         }
                     }
                 }
