@@ -210,7 +210,17 @@ struct RecipeListView: View {
                             let urls = recipes.compactMap { $0.preferredImageURL }
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 14) {
-                                    CookbookCard(title: "Alla recept", imageURLs: urls)
+                                    Button {
+                                        // Users expect this to always show their recipes.
+                                        topSection = .myRecipes
+                                        collectionSegment = .saved
+                                        searchText = ""
+                                        selectedCategory = nil
+                                        showFilters = false
+                                    } label: {
+                                        CookbookCard(title: "Alla recept", imageURLs: urls)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
                                 .padding(.vertical, 4)
                             }
@@ -259,7 +269,9 @@ struct RecipeListView: View {
                             Text("Kommer snart")
                                 .foregroundStyle(.secondary)
                         }
-                    } else if recipes.isEmpty && !isLoading && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    }
+
+                    if recipes.isEmpty && !isLoading && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Section {
                             EmptyStateView(
                                 iconName: "fork.knife",
