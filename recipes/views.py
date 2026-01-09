@@ -372,7 +372,29 @@ class RecipeListView(LoginRequiredMixin, ListView):
         # Search
         q = self.request.GET.get('q')
         if q:
-            queryset = queryset.filter(title__icontains=q)
+            queryset = queryset.filter(Q(title__icontains=q) | Q(tags__icontains=q))
+
+        # Tag filter (exact tags, comma/space separated)
+        tags_param = self.request.GET.get('tags')
+        if tags_param:
+            requested_tags = [
+                t.strip().lstrip('#')
+                for t in re.split(r"[\s,]+", tags_param)
+                if t.strip().lstrip('#')
+            ]
+
+            if requested_tags:
+                matched_ids: list[int] = []
+                for recipe in queryset:
+                    recipe_tags = [
+                        t.strip().lower()
+                        for t in (recipe.tags or "").split(",")
+                        if t.strip()
+                    ]
+                    if all(t.lower() in recipe_tags for t in requested_tags):
+                        matched_ids.append(recipe.id)
+
+                queryset = Recipe.objects.filter(user=self.request.user, id__in=matched_ids)
         
         # Filters
         dish_type = self.request.GET.get('type')

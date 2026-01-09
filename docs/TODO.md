@@ -94,9 +94,8 @@
 
 ## Fas 2: Externa Integrationer & Avancerade funktioner
 
-- [ ] **Taggar (förbättringar)**
     - [ ] Lägga till så att man kan skriva in egna taggar direkt när man sparar ner ett recept (iOS + web)
-    - [ ] Söka/filtrera recept bland sina sparade recept på taggar (iOS + web)
+        - [x] Söka/filtrera recept bland sina sparade recept på taggar (iOS
     - [ ] Smart föreslå taggar vid sparande av nytt recept (egen skrivet eller vid import)
     - [ ] Taggar är user-specifik (per användare)
 

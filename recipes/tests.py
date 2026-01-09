@@ -36,6 +36,36 @@ class RecipeTests(TestCase):
         self.assertContains(response, 'Test Recipe')
         self.assertContains(response, reverse('recipe_cook', args=[self.recipe.pk]) + '?reset=1')
 
+    def test_recipe_list_view_can_filter_by_tags(self):
+        self.recipe.tags = 'pasta, snabbt'
+        self.recipe.save()
+
+        other = Recipe.objects.create(
+            user=self.user,
+            title='Other Recipe',
+            description='Other Description',
+            ingredients='[]',
+            steps='Step 1',
+            cooking_time=10,
+            difficulty='easy',
+            dish_type='other',
+            servings=2,
+            tags='kyckling'
+        )
+
+        response = self.client.get(reverse('recipe_list') + '?tags=pasta')
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Test Recipe')
+        self.assertNotContains(response, other.title)
+
+        response2 = self.client.get(reverse('recipe_list') + '?tags=pasta,snabbt')
+        self.assertEqual(response2.status_code, 200)
+        self.assertContains(response2, 'Test Recipe')
+
+        response3 = self.client.get(reverse('recipe_list') + '?tags=pasta,kyckling')
+        self.assertEqual(response3.status_code, 200)
+        self.assertNotContains(response3, 'Test Recipe')
+
     def test_signup_creates_user_and_logs_in(self):
         anon = Client()
         response = anon.post(

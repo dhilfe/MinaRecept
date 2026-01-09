@@ -22,11 +22,37 @@ struct RecipeListView: View {
         dismissSearch()
     }
 
+    private func searchTokens(from rawQuery: String) -> [String] {
+        let cleaned = rawQuery
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "#", with: " ")
+
+        return cleaned
+            .split(whereSeparator: { $0 == "," || $0.isWhitespace })
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func tagsList(for recipe: RecipeDTO) -> [String] {
+        guard let tags = recipe.tags, !tags.isEmpty else { return [] }
+        return tags
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
     private var searchedRecipes: [RecipeDTO] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return recipes }
+        let tokens = searchTokens(from: searchText)
+        guard !tokens.isEmpty else { return recipes }
+
         return recipes.filter { recipe in
-            recipe.title.localizedCaseInsensitiveContains(query)
+            let recipeTags = tagsList(for: recipe)
+            return tokens.allSatisfy { token in
+                if recipe.title.localizedCaseInsensitiveContains(token) {
+                    return true
+                }
+                return recipeTags.contains(where: { $0.localizedCaseInsensitiveContains(token) })
+            }
         }
     }
 
