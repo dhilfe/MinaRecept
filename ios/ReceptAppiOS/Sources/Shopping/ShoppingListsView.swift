@@ -27,21 +27,33 @@ struct ShoppingListsView: View {
                     List {
                         ForEach(lists) { list in
                             NavigationLink(value: list) {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(list.name)
-                                            .font(.headline)
-
-                                        if let count = list.itemCount {
-                                            Text("\(count) varor")
-                                                .font(.subheadline)
+                                HStack(alignment: .top, spacing: 12) {
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .fill(Color.secondary.opacity(0.10))
+                                        .frame(width: 44, height: 44)
+                                        .overlay {
+                                            Image(systemName: list.isRecurring ? "arrow.triangle.2.circlepath" : "cart")
                                                 .foregroundStyle(.secondary)
                                         }
 
-                                        if let date = list.updatedAt {
-                                            Text(date.formatted(date: .abbreviated, time: .shortened))
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(list.name)
+                                            .font(.headline)
+
+                                        HStack(spacing: 8) {
+                                            if let count = list.itemCount {
+                                                Label("\(count)", systemImage: "checklist")
+                                                    .labelStyle(.titleAndIcon)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+
+                                            if let date = list.updatedAt {
+                                                Label(date.formatted(date: .abbreviated, time: .shortened), systemImage: "clock")
+                                                    .labelStyle(.titleAndIcon)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
                                         }
 
                                         if list.isRecurring {
@@ -50,8 +62,10 @@ struct ShoppingListsView: View {
                                                 .foregroundStyle(.secondary)
                                         }
                                     }
-                                    Spacer()
+
+                                    Spacer(minLength: 0)
                                 }
+                                .padding(.vertical, 2)
                             }
                         }
                         .onDelete(perform: deleteList)
@@ -64,6 +78,7 @@ struct ShoppingListsView: View {
                 }
             }
             .navigationTitle("Inköpslistor")
+            .listStyle(.insetGrouped)
             .navigationDestination(for: ShoppingListDTO.self) { list in
                 ShoppingListDetailView(list: list)
             }
@@ -78,15 +93,17 @@ struct ShoppingListsView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack {
+                    Menu {
                         Button {
                             newListName = ""
                             showCreateAlert = true
                         } label: {
-                            Image(systemName: "plus")
+                            Label("Ny lista", systemImage: "plus")
                         }
-                        
-                        Button("Logga ut") { session.logout() }
+
+                        Button("Logga ut", role: .destructive) { session.logout() }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
                     }
                 }
 

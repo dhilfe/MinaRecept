@@ -61,6 +61,66 @@ struct RecipeListView: View {
         return searchedRecipes.filter { categoryName(for: $0) == selectedCategory }
     }
 
+    private struct RecipeRow: View {
+        let recipe: RecipeDTO
+        let tags: [String]
+
+        var body: some View {
+            HStack(alignment: .top, spacing: 12) {
+                if let url = recipe.preferredImageURL {
+                    AsyncImage(url: url) { image in
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } placeholder: {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.secondary.opacity(0.15))
+                    }
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(.secondary.opacity(0.15))
+                    }
+                } else {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.secondary.opacity(0.10))
+                        .frame(width: 64, height: 64)
+                        .overlay {
+                            Image(systemName: "fork.knife")
+                                .foregroundStyle(.secondary)
+                        }
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(recipe.title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+
+                    if !tags.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(tags.prefix(6), id: \.self) { tag in
+                                    Text(tag)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 4)
+                                        .background(.thinMaterial)
+                                        .clipShape(Capsule())
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
     private var categoryNames: [String] {
         let names = Set(searchedRecipes.map { categoryName(for: $0) })
         return names.sorted(by: compareCategoryNames(_:_:))
@@ -114,24 +174,7 @@ struct RecipeListView: View {
 
                                     ForEach(sectionRecipes) { recipe in
                                         NavigationLink(value: recipe) {
-                                            HStack(spacing: 12) {
-                                                if let url = recipe.preferredImageURL {
-                                                    AsyncImage(url: url) { image in
-                                                        image
-                                                            .resizable()
-                                                            .scaledToFill()
-                                                    } placeholder: {
-                                                        Color.secondary.opacity(0.2)
-                                                    }
-                                                    .frame(width: 56, height: 56)
-                                                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                                                }
-
-                                                VStack(alignment: .leading) {
-                                                    Text(recipe.title)
-                                                        .font(.headline)
-                                                }
-                                            }
+                                            RecipeRow(recipe: recipe, tags: tagsList(for: recipe))
                                         }
                                     }
                                     .onDelete { offsets in
@@ -156,6 +199,7 @@ struct RecipeListView: View {
             }
             .navigationTitle("Mina recept")
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Sök recept")
+            .listStyle(.insetGrouped)
             .navigationDestination(for: RecipeDTO.self) { recipe in
                 RecipeDetailView(recipe: recipe)
             }
@@ -167,7 +211,11 @@ struct RecipeListView: View {
                         Image(systemName: "plus")
                     }
 
-                    Button("Logga ut") { session.logout() }
+                    Menu {
+                        Button("Logga ut", role: .destructive) { session.logout() }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
                 }
 
                 if isLoading {
