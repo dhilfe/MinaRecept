@@ -97,7 +97,7 @@
     - [x] Lägga till så att man kan skriva in egna taggar direkt när man sparar ner ett recept (iOS + web)
         - [x] Söka/filtrera recept bland sina sparade recept på taggar (iOS
     - [x] Smart föreslå taggar vid sparande av nytt recept (egen skrivet eller vid import)
-    - [ ] Taggar är user-specifik (per användare)
+    - [x] Taggar är user-specifik (per användare)
 
 - [ ] **Web/App gemensam yta och look**
     - [ ] Omarbeta utseende för webgränssnittet så att det efterliknar appen

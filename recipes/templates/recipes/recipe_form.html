@@ -20,6 +20,12 @@
                             <option value="{{ name }}">
                         {% endfor %}
                     </datalist>
+
+                    <datalist id="tag-list">
+                        {% for tag in all_tags %}
+                            <option value="{{ tag }}">
+                        {% endfor %}
+                    </datalist>
                     
                     {% if imported_image_url %}
                     <div class="alert alert-secondary">
@@ -58,7 +64,11 @@
                         {% else %}
                             <div class="mb-3">
                                 <label for="{{ field.id_for_label }}" class="form-label">{{ field.label }}</label>
-                                {{ field }}
+                                                                            {% if field.name == 'tags' %}
+                                                                                {{ field.as_widget(attrs={'list': 'tag-list'}) }}
+                                                                            {% else %}
+                                                                                {{ field }}
+                                                                            {% endif %}
                                 {% if field.help_text %}
                                     <div class="form-text">{{ field.help_text }}</div>
                                 {% endif %}

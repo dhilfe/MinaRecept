@@ -532,6 +532,29 @@ class ApiTests(TestCase):
     def _auth1(self):
         self.client_api.credentials(HTTP_AUTHORIZATION=f'Token {self.token1.key}')
 
+    def test_recipe_tags_endpoint_is_user_scoped_and_requires_auth(self):
+        # Add tags for both users
+        self.recipe1.tags = 'middag, Snabbt, middag'
+        self.recipe1.save(update_fields=['tags'])
+        self.recipe2.tags = 'hemligt'
+        self.recipe2.save(update_fields=['tags'])
+
+        # Unauthed
+        resp = self.client_api.get('/api/recipes/tags/')
+        self.assertEqual(resp.status_code, 401)
+
+        # Authed user1
+        self._auth1()
+        resp = self.client_api.get('/api/recipes/tags/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('tags', resp.data)
+        # Should not leak other user's tags
+        self.assertNotIn('hemligt', resp.data['tags'])
+        # Should dedupe case-insensitively but preserve a readable value
+        lowered = [t.lower() for t in resp.data['tags']]
+        self.assertEqual(lowered.count('middag'), 1)
+        self.assertIn('snabbt', lowered)
+
     @patch('recipes.importing.requests.get')
     def test_import_recipe_api_creates_recipe_from_fixture(self, mock_get):
         mock_response = MagicMock()

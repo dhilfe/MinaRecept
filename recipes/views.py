@@ -451,6 +451,29 @@ def get_all_ingredient_names(user):
             pass
     return sorted(list(names))
 
+
+def get_all_recipe_tags(user):
+    """Return distinct, user-specific tags used across the user's recipes."""
+    seen = set()
+    out = []
+    for raw in (
+        Recipe.objects.filter(user=user)
+        .exclude(tags='')
+        .values_list('tags', flat=True)
+    ):
+        for part in (raw or '').split(','):
+            cleaned = part.strip()
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(cleaned)
+
+    out.sort(key=lambda s: s.lower())
+    return out
+
 from django.core.files.base import ContentFile
 
 class RecipeCreateView(LoginRequiredMixin, CreateView):
@@ -488,6 +511,9 @@ class RecipeCreateView(LoginRequiredMixin, CreateView):
         
         # Add ingredient autocomplete list
         context['all_ingredients'] = get_all_ingredient_names(self.request.user)
+
+        # Add tag autocomplete list (user-specific)
+        context['all_tags'] = get_all_recipe_tags(self.request.user)
         return context
 
     def form_valid(self, form):
@@ -521,6 +547,7 @@ class RecipeUpdateView(LoginRequiredMixin, UpdateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['all_ingredients'] = get_all_ingredient_names(self.request.user)
+        context['all_tags'] = get_all_recipe_tags(self.request.user)
         return context
 
 class RecipeDeleteView(LoginRequiredMixin, DeleteView):
