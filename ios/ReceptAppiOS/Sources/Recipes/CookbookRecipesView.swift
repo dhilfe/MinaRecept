@@ -111,8 +111,9 @@ struct CookbookRecipesView: View {
             await loadCookbookRecipes()
         }
         .sheet(isPresented: $showAddRecipeSheet) {
-            RecipePickerView { recipe in
-                Task { await addRecipe(recipeId: recipe.id) }
+            RecipeMultiPickerView { selected in
+                let ids = selected.map { $0.id }
+                Task { await addRecipes(recipeIds: ids) }
             }
             .environmentObject(session)
         }
@@ -135,16 +136,21 @@ struct CookbookRecipesView: View {
     }
 
     @MainActor
-    private func addRecipe(recipeId: Int) async {
+    private func addRecipes(recipeIds: [Int]) async {
         guard let token = session.token else { return }
         guard !isAddingRecipe else { return }
+
+        let unique = Array(Set(recipeIds))
+        guard !unique.isEmpty else { return }
 
         isAddingRecipe = true
         errorMessage = nil
         defer { isAddingRecipe = false }
 
         do {
-            try await APIClient.shared.addRecipeToCookbook(cookbookId: cookbook.id, recipeId: recipeId, token: token)
+            for id in unique {
+                try await APIClient.shared.addRecipeToCookbook(cookbookId: cookbook.id, recipeId: id, token: token)
+            }
             await loadCookbookRecipes()
         } catch {
             errorMessage = APIError.userFacingMessage(for: error)

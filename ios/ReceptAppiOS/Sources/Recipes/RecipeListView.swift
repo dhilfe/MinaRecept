@@ -97,8 +97,9 @@ struct RecipeListView: View {
     }
 
     private var filteredRecipes: [RecipeDTO] {
-        guard let selectedCategory else { return searchedRecipes }
-        return tagFilteredRecipes.filter { categoryName(for: $0) == selectedCategory }
+        let base = tagFilteredRecipes
+        guard let selectedCategory else { return base }
+        return base.filter { categoryName(for: $0) == selectedCategory }
     }
 
     private var displayedRecipes: [RecipeDTO] {
@@ -413,6 +414,7 @@ struct RecipeListView: View {
             }
             .navigationTitle("Hem")
             .listStyle(.insetGrouped)
+            .scrollDismissesKeyboard(.immediately)
             .navigationDestination(for: RecipeDTO.self) { recipe in
                 RecipeDetailView(recipe: recipe)
             }
