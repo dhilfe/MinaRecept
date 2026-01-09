@@ -82,6 +82,7 @@ class CookbookApiTests(TestCase):
             ingredients="1 thing",
             steps="do it",
             cooking_time=10,
+            image_url="https://example.com/img.jpg",
         )
 
         add1 = self.client.post(
@@ -101,6 +102,7 @@ class CookbookApiTests(TestCase):
         list_resp = self.client.get("/api/cookbooks/")
         self.assertEqual(list_resp.status_code, 200)
         self.assertEqual(list_resp.data[0]["recipe_count"], 1)
+        self.assertEqual(list_resp.data[0]["preview_image_urls"], ["https://example.com/img.jpg"])
 
     def test_list_cookbook_recipes(self):
         cookbook_resp = self.client.post("/api/cookbooks/", {"name": "Middag"}, format="json")

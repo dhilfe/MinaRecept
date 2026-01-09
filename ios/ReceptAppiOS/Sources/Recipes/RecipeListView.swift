@@ -227,7 +227,7 @@ struct RecipeListView: View {
                                         Button {
                                             path.append(cookbook)
                                         } label: {
-                                            CookbookCard(title: cookbook.name, imageURLs: [])
+                                            CookbookCard(title: cookbook.name, imageURLs: cookbook.previewImageURLs ?? [])
                                         }
                                         .buttonStyle(.plain)
                                     }

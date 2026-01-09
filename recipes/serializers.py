@@ -50,6 +50,23 @@ class RecipeSerializer(serializers.ModelSerializer):
 
 class CookbookSerializer(serializers.ModelSerializer):
     recipe_count = serializers.IntegerField(source='recipes.count', read_only=True)
+    preview_image_urls = serializers.SerializerMethodField()
+
+    def get_preview_image_urls(self, obj: Cookbook) -> list[str]:
+        request = self.context.get('request')
+
+        qs = obj.recipes.all().order_by('-updated_at', '-created_at')
+        urls: list[str] = []
+        for recipe in qs[:3]:
+            if recipe.image:
+                url = recipe.image.url
+                if request is not None:
+                    url = request.build_absolute_uri(url)
+                urls.append(url)
+            elif recipe.image_url:
+                urls.append(recipe.image_url)
+
+        return urls
 
     def validate_name(self, value: str) -> str:
         name = (value or '').strip()
@@ -69,8 +86,8 @@ class CookbookSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Cookbook
-        fields = ['id', 'user', 'name', 'created_at', 'updated_at', 'recipe_count']
-        read_only_fields = ['user', 'created_at', 'updated_at', 'recipe_count']
+        fields = ['id', 'user', 'name', 'created_at', 'updated_at', 'recipe_count', 'preview_image_urls']
+        read_only_fields = ['user', 'created_at', 'updated_at', 'recipe_count', 'preview_image_urls']
 
 
 class ShoppingListSerializer(serializers.ModelSerializer):
