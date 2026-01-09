@@ -19,8 +19,11 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 
+from receptapp_project.health import health
+
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/health/', health),
     path('api/', include('recipes.api_urls')),
     path('', include('recipes.urls')),
     # Social login (Apple, Google, etc)

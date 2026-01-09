@@ -8,6 +8,8 @@ services:
       - media_volume:/app/media
     expose:
       - 8000
+    environment:
+      - GIT_SHA=${GIT_SHA:-unknown}
     env_file:
       - .env
     environment:
