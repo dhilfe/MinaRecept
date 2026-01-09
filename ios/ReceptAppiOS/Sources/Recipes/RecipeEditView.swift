@@ -58,6 +58,10 @@ struct RecipeEditView: View {
                         Text("Ex: middag, snabbt, vegetariskt")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+
+                        Button("Föreslå taggar") {
+                            tags = mergeSuggestedTags(into: tags)
+                        }
                 }
 
                 Section("Beskrivning") {
@@ -160,6 +164,59 @@ struct RecipeEditView: View {
         } catch {
             errorMessage = APIError.userFacingMessage(for: error)
         }
+    }
+
+    private func mergeSuggestedTags(into current: String) -> String {
+        let existing = normalizeTags(current)
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let text = "\(title) \(ingredients) \(steps)".lowercased()
+        let suggestions = suggestTags(in: text)
+
+        var combined: [String] = []
+        var seen = Set<String>()
+        for tag in existing + suggestions {
+            let cleaned = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+            guard !cleaned.isEmpty else { continue }
+            if !seen.contains(cleaned) {
+                seen.insert(cleaned)
+                combined.append(cleaned)
+            }
+        }
+
+        return combined.joined(separator: ", ")
+    }
+
+    private func suggestTags(in lowercasedText: String) -> [String] {
+        let keywords: [(String, String)] = [
+            ("kyckling", "kyckling"),
+            ("lax", "fisk"),
+            ("torsk", "fisk"),
+            ("räkor", "skaldjur"),
+            ("pasta", "pasta"),
+            ("korv", "korv"),
+            ("soppa", "soppa"),
+            ("färs", "färs"),
+            ("kött", "kött"),
+            ("tofu", "vegetariskt"),
+            ("linser", "vegetariskt"),
+            ("bönor", "vegetariskt"),
+            ("choklad", "dessert"),
+            ("bakpulver", "dessert")
+        ]
+
+        var out: [String] = []
+        for (needle, tag) in keywords {
+            if lowercasedText.contains(needle) {
+                out.append(tag)
+            }
+        }
+
+        var seen = Set<String>()
+        return out.filter { seen.insert($0).inserted }
     }
 
         private func normalizeTags(_ input: String) -> String {
