@@ -16,7 +16,7 @@ struct MainTabView: View {
         TabView(selection: $selectedTab) {
             RecipeListView(resetToken: recipesResetToken)
                 .tabItem {
-                    Label("Spara", systemImage: "bookmark")
+                    Label("Hem", systemImage: "house")
                 }
                 .tag(Tab.recipes)
 
