@@ -1259,6 +1259,13 @@ class CookbookViewSet(OwnedModelViewSet):
     queryset = Cookbook.objects.all().order_by('-updated_at', '-created_at')
     serializer_class = CookbookSerializer
 
+    @action(detail=True, methods=['get'], url_path='recipes')
+    def recipes(self, request, pk=None):
+        cookbook: Cookbook = self.get_object()
+        qs = cookbook.recipes.all().order_by('-updated_at', '-created_at')
+        serializer = RecipeSerializer(qs, many=True, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
     @action(detail=True, methods=['post'], url_path='add-recipe')
     def add_recipe(self, request, pk=None):
         cookbook: Cookbook = self.get_object()

@@ -7,6 +7,7 @@ struct RecipeListView: View {
     let resetToken: Int
 
     @State private var recipes: [RecipeDTO] = []
+    @State private var cookbooks: [CookbookDTO] = []
     @State private var isLoading: Bool = false
     @State private var errorMessage: String? = nil
     @State private var searchText: String = ""
@@ -221,6 +222,15 @@ struct RecipeListView: View {
                                         CookbookCard(title: "Alla recept", imageURLs: urls)
                                     }
                                     .buttonStyle(.plain)
+
+                                    ForEach(cookbooks) { cookbook in
+                                        Button {
+                                            path.append(cookbook)
+                                        } label: {
+                                            CookbookCard(title: cookbook.name, imageURLs: [])
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
                                 }
                                 .padding(.vertical, 4)
                             }
@@ -332,6 +342,10 @@ struct RecipeListView: View {
             .listStyle(.insetGrouped)
             .navigationDestination(for: RecipeDTO.self) { recipe in
                 RecipeDetailView(recipe: recipe)
+            }
+            .navigationDestination(for: CookbookDTO.self) { cookbook in
+                CookbookRecipesView(cookbook: cookbook)
+                    .environmentObject(session)
             }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
@@ -463,6 +477,7 @@ struct RecipeListView: View {
 
         do {
             recipes = try await APIClient.shared.fetchRecipes(token: token)
+            cookbooks = try await APIClient.shared.fetchCookbooks(token: token)
         } catch {
             errorMessage = APIError.userFacingMessage(for: error)
         }

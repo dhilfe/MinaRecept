@@ -181,6 +181,30 @@ final class APIClient {
         }
     }
 
+    func fetchCookbookRecipes(cookbookId: Int, token: String) async throws -> [RecipeDTO] {
+        let url = try url("cookbooks/\(cookbookId)/recipes/")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw APIError.network(error)
+        }
+
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else { throw APIError.httpStatus(http.statusCode, nil) }
+
+        do {
+            return try decoder.decode([RecipeDTO].self, from: data)
+        } catch {
+            throw APIError.decoding(error)
+        }
+    }
+
     func createCookbook(name: String, token: String) async throws -> CookbookDTO {
         let url = try url("cookbooks/")
         var request = URLRequest(url: url)

@@ -293,7 +293,7 @@ struct RecipeDetailView: View {
                 }
             } label: {
                 Image(systemName: checkedIngredientIds.contains(ing.id) ? "checkmark.square" : "square")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(checkedIngredientIds.contains(ing.id) ? .green : .secondary)
             }
             .buttonStyle(.plain)
 
@@ -359,7 +359,7 @@ struct RecipeDetailView: View {
                         } label: {
                             HStack(alignment: .top, spacing: 12) {
                                 Image(systemName: checkedStepKeys.contains(key) ? "checkmark.square" : "square")
-                                    .foregroundStyle(.secondary)
+                                      .foregroundStyle(checkedStepKeys.contains(key) ? .green : .secondary)
                                     .padding(.top, 2)
                                 Text(step)
                                     .foregroundStyle(.primary)
@@ -611,6 +611,15 @@ private struct CookbookPickerSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Avbryt") { dismiss() }
                         .disabled(isLoading)
+                }
+
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showCreatePrompt = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .disabled(isLoading)
                 }
             }
             .safeAreaInset(edge: .bottom) {
