@@ -7,6 +7,7 @@ struct RecipeDTO: Codable, Identifiable, Hashable {
     let ingredients: String?
     let steps: String?
     let cookingTime: Int?
+    let servings: Int?
     let imageURL: URL?
     let dishType: String?
     let tags: String?
@@ -18,6 +19,7 @@ struct RecipeDTO: Codable, Identifiable, Hashable {
         case ingredients
         case steps
         case cookingTime = "cooking_time"
+        case servings
         case imageURL = "image_url"
         case dishType = "dish_type"
         case tags

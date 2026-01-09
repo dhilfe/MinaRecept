@@ -3,6 +3,12 @@ import SwiftUI
 struct RecipeDetailView: View {
     @EnvironmentObject private var session: SessionController
 
+    private enum DetailTab: String, CaseIterable {
+        case cook = "Tillaga"
+        case comments = "Kommentarer"
+        case film = "Se film"
+    }
+
     @State private var recipe: RecipeDTO
     @State private var isLoading: Bool = false
     @State private var errorMessage: String? = nil
@@ -10,29 +16,48 @@ struct RecipeDetailView: View {
     @State private var showEditSheet = false
     @State private var checkedIngredientIds: Set<String> = []
     @State private var checkedStepKeys: Set<String> = []
+    @State private var selectedTab: DetailTab = .cook
+    @State private var servings: Int = 4
+    @State private var baseServings: Int = 4
+    @State private var showCookbookAlert: Bool = false
 
     init(recipe: RecipeDTO) {
         _recipe = State(initialValue: recipe)
+        let initialServings = max(1, recipe.servings ?? 4)
+        _servings = State(initialValue: initialServings)
+        _baseServings = State(initialValue: initialServings)
     }
 
     private var parsedSteps: [String] { parseSteps(recipe.steps) }
     private var parsedIngredients: [IngredientDTO] { IngredientsParser.parse(recipe.ingredients) }
 
     var body: some View {
-        List {
-            cookModeSection
-            imageSection
-            metaSection
-            descriptionSection
-            ingredientsSection
-            stepsSection
-            missingContentSection
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                headerSection
+                tabsSection
+
+                switch selectedTab {
+                case .cook:
+                    cookTab
+                case .comments:
+                    placeholderTab(text: "Kommer snart")
+                case .film:
+                    placeholderTab(text: "Kommer snart")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
-        .navigationTitle(recipe.title)
+        .navigationTitle("Recept")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Redigera") { showEditSheet = true }
+                Button {
+                    showEditSheet = true
+                } label: {
+                    Image(systemName: "pencil")
+                }
                     .disabled(isLoading)
             }
 
@@ -66,102 +91,171 @@ struct RecipeDetailView: View {
         } message: {
             Text("Ingredienserna har lagts till i din inköpslista.")
         }
+        .alert("Kokbok", isPresented: $showCookbookAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Kommer snart")
+        }
+        .onChange(of: recipe.servings) { newValue in
+            guard let newValue else { return }
+            if servings == baseServings {
+                servings = max(1, newValue)
+            }
+            baseServings = max(1, newValue)
+        }
         .refreshable {
             await loadRecipe()
         }
     }
 
-    @ViewBuilder
-    private var cookModeSection: some View {
-        if !parsedSteps.isEmpty {
-            Section {
-                NavigationLink("Starta Cook Mode") {
-                    CookModeView(title: recipe.title, steps: parsedSteps)
-                }
-            }
-        }
-    }
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(recipe.title)
+                .font(.title)
+                .fontWeight(.semibold)
 
-    @ViewBuilder
-    private var imageSection: some View {
-        if let url = recipe.preferredImageURL {
-            Section {
-                AsyncImage(url: url) { image in
-                    image
-                        .resizable()
-                        .scaledToFill()
-                } placeholder: {
-                    ProgressView()
-                }
-                .frame(height: 220)
-                .clipped()
-            }
-            .listRowInsets(EdgeInsets())
-        }
-    }
-
-    private var dishTypeBinding: Binding<String> {
-        Binding(
-            get: { recipe.dishType ?? "lunch_dinner" },
-            set: { newValue in
-                Task { await updateDishType(newValue) }
-            }
-        )
-    }
-
-    @ViewBuilder
-    private var metaSection: some View {
-        Section {
-            Picker("Kategori", selection: dishTypeBinding) {
-                ForEach(RecipeDTO.allDishTypes, id: \.id) { type in
-                    Text(type.name).tag(type.id)
-                }
-            }
-
-            if let minutes = recipe.cookingTime, minutes > 0 {
-                HStack {
-                    Text("Tid")
-                    Spacer()
-                    Text(formatDuration(minutes))
+            if let originalUrl = parseOriginalSource(from: recipe.description).originalUrl {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Originalreceptet är från")
+                        .foregroundStyle(.secondary)
+                    Link(sourceLabel(for: originalUrl), destination: originalUrl)
                         .foregroundStyle(.secondary)
                 }
             }
-            
-            if let tags = recipe.tags, !tags.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Taggar")
-                        .font(.headline)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(tags.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }, id: \.self) { tag in
-                                Text("#" + tag)
-                                    .font(.caption)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
-                                    .background(Color.blue.opacity(0.1))
-                                    .foregroundColor(.blue)
-                                    .cornerRadius(12)
-                            }
-                        }
-                    }
+
+            HStack(spacing: 12) {
+                Circle()
+                    .fill(.orange)
+                    .frame(width: 44, height: 44)
+                    .overlay(
+                        Text("D")
+                            .foregroundStyle(.white)
+                            .fontWeight(.bold)
+                    )
+                Text("Du")
+                    .font(.headline)
+                Spacer(minLength: 0)
+            }
+
+            actionButtons
+        }
+    }
+
+    private var actionButtons: some View {
+        VStack(spacing: 10) {
+            PillButton(title: "Lägg till i kokbok", systemImage: "book") {
+                showCookbookAlert = true
+            }
+
+            HStack(spacing: 10) {
+                PillButton(title: "Lägg till i\ninköpslista", systemImage: "basket") {
+                    Task { await addToShoppingList() }
+                }
+                .disabled(isLoading)
+
+                ShareLink(item: shareText) {
+                    pillLabel(title: "Dela", systemImage: "square.and.arrow.up")
                 }
             }
         }
     }
 
-    @ViewBuilder
-    private var descriptionSection: some View {
-        if let description = recipe.description, !description.isEmpty {
-            Section("Beskrivning") {
-                    LinkifiedDescriptionText(text: description)
+    private func pillLabel(title: String, systemImage: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+            Text(title)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 12)
+        .background(.thinMaterial)
+        .clipShape(Capsule())
+    }
+
+    private var tabsSection: some View {
+        HStack(spacing: 0) {
+            ForEach(DetailTab.allCases, id: \.self) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    VStack(spacing: 8) {
+                        Text(tab.rawValue)
+                            .font(.headline)
+                            .foregroundStyle(selectedTab == tab ? .primary : .secondary)
+                        Rectangle()
+                            .fill(selectedTab == tab ? Color.primary : Color.clear)
+                            .frame(height: 2)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
             }
         }
     }
 
+    private func placeholderTab(text: String) -> some View {
+        Text(text)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 12)
+    }
+
+    private var cookTab: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            servingsControl
+            cookModeButton
+            ingredientsBlock
+            stepsBlock
+            missingContentBlock
+        }
+    }
+
+    private var servingsControl: some View {
+        HStack(spacing: 12) {
+            Button {
+                servings = max(1, servings - 1)
+            } label: {
+                Image(systemName: "minus")
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.bordered)
+
+            Text("För \(servings) portioner")
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+
+            Button {
+                servings = min(99, servings + 1)
+            } label: {
+                Image(systemName: "plus")
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
     @ViewBuilder
-    private var ingredientsSection: some View {
+    private var cookModeButton: some View {
+        if !parsedSteps.isEmpty {
+            NavigationLink {
+                CookModeView(title: recipe.title, steps: parsedSteps)
+            } label: {
+                Text("Öppna i matlagningsvy")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    @ViewBuilder
+    private var ingredientsBlock: some View {
         if !parsedIngredients.isEmpty {
-            Section("Ingredienser") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("\(parsedIngredients.count) Ingredienser")
+                    .font(.title2)
+                    .fontWeight(.bold)
+
                 let all = parsedIngredients
                 ForEach(Array(all.enumerated()), id: \.element.id) { idx, ing in
                     let text = formatIngredient(ing)
@@ -171,46 +265,63 @@ struct RecipeDetailView: View {
                     }()
 
                     if isHeadingLine(ing: ing, text: text, nextText: nextText) {
-                        Text(normalizeTrailingColon(text) + ":")
-                            .font(.headline)
-                            .padding(.vertical, 4)
+                        Text(normalizeTrailingColon(text))
+                            .font(.title3)
+                            .fontWeight(.semibold)
+                            .padding(.top, 6)
                     } else {
-                        let displayText = normalizeTrailingColon(text)
-                        Button {
-                            if checkedIngredientIds.contains(ing.id) {
-                                checkedIngredientIds.remove(ing.id)
-                            } else {
-                                checkedIngredientIds.insert(ing.id)
-                            }
-                        } label: {
-                            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                                Image(systemName: checkedIngredientIds.contains(ing.id) ? "checkmark.square" : "square")
-                                    .foregroundStyle(.secondary)
-                                Text(displayText)
-                                    .foregroundStyle(.primary)
-                            }
-                        }
-                        .buttonStyle(.plain)
+                        ingredientRow(ing: ing, text: normalizeTrailingColon(text))
                     }
                 }
-                Button("Lägg till i inköpslista") {
-                    Task { await addToShoppingList() }
-                }
-                .disabled(isLoading)
             }
         }
     }
 
+    private func ingredientRow(ing: IngredientDTO, text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Button {
+                if checkedIngredientIds.contains(ing.id) {
+                    checkedIngredientIds.remove(ing.id)
+                } else {
+                    checkedIngredientIds.insert(ing.id)
+                }
+            } label: {
+                Image(systemName: checkedIngredientIds.contains(ing.id) ? "checkmark.square" : "square")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+
+            Text(text)
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                Task { await addToShoppingList() }
+            } label: {
+                Image(systemName: "cart.badge.plus")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(isLoading)
+        }
+        .padding(.vertical, 6)
+    }
+
     @ViewBuilder
-    private var stepsSection: some View {
+    private var stepsBlock: some View {
         if !parsedSteps.isEmpty {
-            Section("Gör så här") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Gör så här")
+                    .font(.title2)
+                    .fontWeight(.bold)
+
                 ForEach(Array(parsedSteps.enumerated()), id: \.offset) { idx, step in
                     let key = "\(idx)|\(step)"
                     if isHeadingStep(step) {
-                        Text(step.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: ":")) + ":")
-                            .font(.headline)
-                            .padding(.vertical, 4)
+                        Text(step.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: ":")))
+                            .font(.title3)
+                            .fontWeight(.semibold)
+                            .padding(.top, 6)
                     } else {
                         Button {
                             if checkedStepKeys.contains(key) {
@@ -219,23 +330,33 @@ struct RecipeDetailView: View {
                                 checkedStepKeys.insert(key)
                             }
                         } label: {
-                            HStack(alignment: .top, spacing: 10) {
+                            HStack(alignment: .top, spacing: 12) {
                                 Image(systemName: checkedStepKeys.contains(key) ? "checkmark.square" : "square")
                                     .foregroundStyle(.secondary)
                                     .padding(.top, 2)
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("\(idx + 1).")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    Text(step)
-                                        .foregroundStyle(.primary)
-                                }
+                                Text(step)
+                                    .foregroundStyle(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
                         .buttonStyle(.plain)
+                        .padding(.vertical, 6)
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var missingContentBlock: some View {
+        let hasDescription = !parseOriginalSource(from: recipe.description)
+            .prefixText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+
+        if !hasDescription, parsedIngredients.isEmpty, parsedSteps.isEmpty {
+            Text("Det här receptet saknar ingredienser eller steg.")
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -267,14 +388,25 @@ struct RecipeDetailView: View {
         return false
     }
 
-    @ViewBuilder
-    private var missingContentSection: some View {
-        let hasDescription = !(recipe.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if !hasDescription, parsedIngredients.isEmpty, parsedSteps.isEmpty {
-            Section("Innehåll") {
-                Text("Det här receptet saknar ingredienser eller steg.")
-                    .foregroundStyle(.secondary)
+    private struct PillButton: View {
+        let title: String
+        let systemImage: String
+        let action: () -> Void
+
+        var body: some View {
+            Button(action: action) {
+                HStack(spacing: 10) {
+                    Image(systemName: systemImage)
+                    Text(title)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .padding(.horizontal, 12)
+                .background(.thinMaterial)
+                .clipShape(Capsule())
             }
+            .buttonStyle(.plain)
         }
     }
 
@@ -283,18 +415,6 @@ struct RecipeDetailView: View {
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         return parts.joined(separator: " ")
-    }
-
-    private func formatDuration(_ minutes: Int) -> String {
-        if minutes < 60 {
-            return "\(minutes) min"
-        }
-        let h = minutes / 60
-        let m = minutes % 60
-        if m == 0 {
-            return "\(h) tim"
-        }
-        return "\(h) tim \(m) min"
     }
 
     private func parseSteps(_ raw: String?) -> [String] {
@@ -312,7 +432,10 @@ struct RecipeDetailView: View {
         }
 
         var bySentences: [String] = []
-        normalized.enumerateSubstrings(in: normalized.startIndex..<normalized.endIndex, options: [.bySentences]) { substring, _, _, _ in
+        normalized.enumerateSubstrings(
+            in: normalized.startIndex..<normalized.endIndex,
+            options: [.bySentences]
+        ) { substring, _, _, _ in
             if let substring {
                 let trimmed = substring.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
@@ -354,69 +477,55 @@ struct RecipeDetailView: View {
         }
     }
 
-    private func updateDishType(_ newType: String) async {
-        guard let token = session.token else { return }
-        // Don't set isLoading = true here as it might block the UI too much for a simple picker change
-        // or we can use a separate loading state if needed.
-        // For now, let's just do it.
-        
-        do {
-            let updatedRecipe = try await APIClient.shared.updateRecipe(
-                id: recipe.id,
-                fields: ["dish_type": newType],
-                token: token
-            )
-            recipe = updatedRecipe
-            session.triggerReloadRecipes()
-        } catch {
-            errorMessage = APIError.userFacingMessage(for: error)
+    private var shareText: String {
+        var parts: [String] = [recipe.title]
+        let parsed = parseOriginalSource(from: recipe.description)
+        if !parsed.prefixText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(parsed.prefixText.trimmingCharacters(in: .whitespacesAndNewlines))
         }
+        if let url = parsed.originalUrl {
+            parts.append(url.absoluteString)
+        }
+        return parts.joined(separator: "\n\n")
     }
 
-    private struct LinkifiedDescriptionText: View {
-        let text: String
+    private func parseOriginalSource(from description: String?) -> (prefixText: String, originalUrl: URL?) {
+        let text = description ?? ""
 
-        var body: some View {
-            let parsed = parseOriginalSource(text)
-            if let originalUrl = parsed.originalUrl {
-                VStack(alignment: .leading, spacing: 8) {
-                    if !parsed.prefixText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text(parsed.prefixText.trimmingCharacters(in: .whitespacesAndNewlines))
-                    }
-                    HStack(spacing: 0) {
-                        Text("Originalreceptet är från ")
-                        Link("www.instagram.com", destination: originalUrl)
-                    }
-                }
-            } else {
-                Text(text)
-            }
+        // Backend appends a final line: "Originalreceptet är från <url>"
+        let lines = text.split(whereSeparator: \.isNewline).map { String($0) }
+        guard let lastLine = lines.last else {
+            return (text, nil)
         }
 
-        private func parseOriginalSource(_ text: String) -> (prefixText: String, originalUrl: URL?) {
-            // Backend appends a final line: "Originalreceptet är från <url>"
-            let lines = text.split(whereSeparator: \.isNewline).map { String($0) }
-            guard let lastLine = lines.last else {
-                return (text, nil)
-            }
-            let pattern = "(?i)^\\s*originalreceptet är från\\s+(https?://\\S+)\\s*$"
-            guard let regex = try? NSRegularExpression(pattern: pattern) else {
-                return (text, nil)
-            }
-            let range = NSRange(location: 0, length: (lastLine as NSString).length)
-            guard let match = regex.firstMatch(in: lastLine, range: range), match.numberOfRanges >= 2 else {
-                return (text, nil)
-            }
-            let urlRange = match.range(at: 1)
-            guard let swiftRange = Range(urlRange, in: lastLine) else {
-                return (text, nil)
-            }
-            let urlString = String(lastLine[swiftRange])
-            guard let url = URL(string: urlString) else {
-                return (text, nil)
-            }
-            let prefix = lines.dropLast().joined(separator: "\n")
-            return (prefix, url)
+        let pattern = "(?i)^\\s*originalreceptet är från\\s+(https?://\\S+)\\s*$"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return (text, nil)
         }
+
+        let range = NSRange(location: 0, length: (lastLine as NSString).length)
+        guard let match = regex.firstMatch(in: lastLine, range: range), match.numberOfRanges >= 2 else {
+            return (text, nil)
+        }
+
+        let urlRange = match.range(at: 1)
+        guard let swiftRange = Range(urlRange, in: lastLine) else {
+            return (text, nil)
+        }
+
+        let urlString = String(lastLine[swiftRange])
+        guard let url = URL(string: urlString) else {
+            return (text, nil)
+        }
+
+        let prefix = lines.dropLast().joined(separator: "\n")
+        return (prefix, url)
+    }
+
+    private func sourceLabel(for url: URL) -> String {
+        if let host = url.host?.lowercased(), host.contains("instagram.com") {
+            return "www.instagram.com"
+        }
+        return url.host ?? url.absoluteString
     }
 }
