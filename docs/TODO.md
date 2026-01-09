@@ -63,7 +63,7 @@
     - [x] iOS Share Extension target
     - [x] Hantera delade URL:er
     - [x] Deep linking till huvudappen
-    - [ ] (Fine tuning) Lägg till timing-loggar i Share Extension (t.ex. preview → thumbnail → upload → response) för att kunna pinpointa 3–10s-latens
+    - [x] (Fine tuning) Lägg till timing-loggar i Share Extension (t.ex. preview → thumbnail → upload → response) för att kunna pinpointa 3–10s-latens
 
 - [x] **Robust Recept-import från URL**
     - [x] Hämta HTML från URL
