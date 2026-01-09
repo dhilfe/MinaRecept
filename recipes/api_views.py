@@ -223,6 +223,21 @@ class RecipeViewSet(OwnedModelViewSet):
         except Exception as e:
             return Response({'detail': f'Import failed: {e}'}, status=status.HTTP_400_BAD_REQUEST)
 
+        def normalize_tags(raw: str) -> str:
+            parts = [p.strip() for p in (raw or "").split(",")]
+            parts = [p for p in parts if p]
+            seen: set[str] = set()
+            out: list[str] = []
+            for p in parts:
+                key = p.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(p)
+            return ", ".join(out)
+
+        requested_tags = normalize_tags((request.data.get("tags") or "").strip())
+
         recipe = Recipe.objects.create(
             user=request.user,
             title=imported.title,
@@ -233,6 +248,7 @@ class RecipeViewSet(OwnedModelViewSet):
             servings=imported.servings,
             image_url=imported.image_url,
             dish_type=dish_type or Recipe._meta.get_field('dish_type').default,
+            tags=requested_tags,
         )
 
         serializer = self.get_serializer(recipe)
@@ -276,6 +292,21 @@ class RecipeViewSet(OwnedModelViewSet):
         # Performance: for Instagram shares we often already have the full caption (source_text).
         # In that case OCR is low-signal (thumbnail image) and can add seconds of latency.
         is_instagram = "instagram.com" in (source_url or "").lower()
+
+        def normalize_tags(raw: str) -> str:
+            parts = [p.strip() for p in (raw or "").split(",")]
+            parts = [p for p in parts if p]
+            seen: set[str] = set()
+            out: list[str] = []
+            for p in parts:
+                key = p.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(p)
+            return ", ".join(out)
+
+        requested_tags = normalize_tags((request.data.get("tags") or "").strip())
 
         def safe_int(value, default: int) -> int:
             """
@@ -1090,6 +1121,9 @@ class RecipeViewSet(OwnedModelViewSet):
                 # Deduplicate and clean: lowercase, unique.
                 unique_tags = list(dict.fromkeys([tag.lower() for tag in hashtags]))
                 extracted_tags = ", ".join(unique_tags)
+
+        if requested_tags:
+            extracted_tags = normalize_tags(",".join([extracted_tags, requested_tags]))
 
         recipe = Recipe.objects.create(
             user=request.user,
