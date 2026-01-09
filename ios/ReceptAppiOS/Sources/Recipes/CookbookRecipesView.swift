@@ -9,6 +9,9 @@ struct CookbookRecipesView: View {
     @State private var isLoading: Bool = false
     @State private var errorMessage: String? = nil
 
+    @State private var showAddRecipeSheet: Bool = false
+    @State private var isAddingRecipe: Bool = false
+
     private struct RecipeRow: View {
         let recipe: RecipeDTO
 
@@ -54,6 +57,15 @@ struct CookbookRecipesView: View {
 
     var body: some View {
         List {
+            Section {
+                Button {
+                    showAddRecipeSheet = true
+                } label: {
+                    Label("Lägg till recept", systemImage: "plus")
+                }
+                .disabled(isAddingRecipe)
+            }
+
             if recipes.isEmpty {
                 Section {
                     Text(isLoading ? "Laddar..." : "Inga recept i kokboken än")
@@ -72,6 +84,13 @@ struct CookbookRecipesView: View {
         .navigationTitle(cookbook.name)
         .navigationBarTitleDisplayMode(.inline)
         .listStyle(.insetGrouped)
+        .toolbar {
+            if isAddingRecipe {
+                ToolbarItem(placement: .topBarLeading) {
+                    ProgressView()
+                }
+            }
+        }
         .overlay {
             if isLoading && recipes.isEmpty {
                 ProgressView("Laddar recept...")
@@ -91,6 +110,12 @@ struct CookbookRecipesView: View {
         .refreshable {
             await loadCookbookRecipes()
         }
+        .sheet(isPresented: $showAddRecipeSheet) {
+            RecipePickerView { recipe in
+                Task { await addRecipe(recipeId: recipe.id) }
+            }
+            .environmentObject(session)
+        }
     }
 
     @MainActor
@@ -104,6 +129,23 @@ struct CookbookRecipesView: View {
 
         do {
             recipes = try await APIClient.shared.fetchCookbookRecipes(cookbookId: cookbook.id, token: token)
+        } catch {
+            errorMessage = APIError.userFacingMessage(for: error)
+        }
+    }
+
+    @MainActor
+    private func addRecipe(recipeId: Int) async {
+        guard let token = session.token else { return }
+        guard !isAddingRecipe else { return }
+
+        isAddingRecipe = true
+        errorMessage = nil
+        defer { isAddingRecipe = false }
+
+        do {
+            try await APIClient.shared.addRecipeToCookbook(cookbookId: cookbook.id, recipeId: recipeId, token: token)
+            await loadCookbookRecipes()
         } catch {
             errorMessage = APIError.userFacingMessage(for: error)
         }
