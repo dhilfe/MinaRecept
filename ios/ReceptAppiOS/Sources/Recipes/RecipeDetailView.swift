@@ -19,7 +19,7 @@ struct RecipeDetailView: View {
     @State private var selectedTab: DetailTab = .cook
     @State private var servings: Int = 4
     @State private var baseServings: Int = 4
-    @State private var showCookbookAlert: Bool = false
+    @State private var showCookbookSheet: Bool = false
 
     init(recipe: RecipeDTO) {
         _recipe = State(initialValue: recipe)
@@ -91,10 +91,16 @@ struct RecipeDetailView: View {
         } message: {
             Text("Ingredienserna har lagts till i din inköpslista.")
         }
-        .alert("Kokbok", isPresented: $showCookbookAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("Kommer snart")
+        .sheet(isPresented: $showCookbookSheet) {
+            if let token = session.token {
+                CookbookPickerSheet(recipeId: recipe.id, token: token)
+            } else {
+                EmptyStateView(
+                    iconName: "book",
+                    title: "Du har inga kokböcker än",
+                    message: "Logga in för att skapa kokböcker."
+                )
+            }
         }
         .onChange(of: recipe.servings) { newValue in
             guard let newValue else { return }
@@ -144,7 +150,7 @@ struct RecipeDetailView: View {
     private var actionButtons: some View {
         VStack(spacing: 10) {
             PillButton(title: "Lägg till i kokbok", systemImage: "book") {
-                showCookbookAlert = true
+                showCookbookSheet = true
             }
 
             HStack(spacing: 10) {
@@ -527,5 +533,150 @@ struct RecipeDetailView: View {
             return "www.instagram.com"
         }
         return url.host ?? url.absoluteString
+    }
+}
+
+private struct CookbookPickerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let recipeId: Int
+    let token: String
+
+    @State private var cookbooks: [CookbookDTO] = []
+    @State private var isLoading: Bool = false
+    @State private var errorMessage: String? = nil
+
+    @State private var showCreatePrompt: Bool = false
+    @State private var newCookbookName: String = ""
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if cookbooks.isEmpty {
+                    EmptyStateView(
+                        iconName: "book",
+                        title: "Du har inga kokböcker än",
+                        message: "",
+                        actionTitle: "+ Skapa kokbok",
+                        action: { showCreatePrompt = true }
+                    )
+                } else {
+                    List {
+                        ForEach(cookbooks) { cb in
+                            Button {
+                                Task { await addRecipe(to: cb.id) }
+                            } label: {
+                                HStack {
+                                    Text(cb.name)
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    if let count = cb.recipeCount {
+                                        Text("\(count)")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            .disabled(isLoading)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Kokbok")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Avbryt") { dismiss() }
+                        .disabled(isLoading)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if let errorMessage {
+                    Text(errorMessage)
+                        .frame(maxWidth: .infinity)
+                        .padding(12)
+                        .background(.thinMaterial)
+                }
+            }
+            .task {
+                await loadCookbooks()
+            }
+            .alert("Ge din nya kokbok ett namn", isPresented: $showCreatePrompt) {
+                TextField("Namn", text: $newCookbookName)
+                Button("Avbryt", role: .cancel) { }
+                Button("Lägg till") {
+                    Task { await createCookbookAndAddRecipe() }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func loadCookbooks() async {
+        guard !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        do {
+            cookbooks = try await APIClient.shared.fetchCookbooks(token: token)
+        } catch {
+            errorMessage = "Kunde inte hämta kokböcker. \(APIError.userFacingMessage(for: error))"
+        }
+    }
+
+    @MainActor
+    private func createCookbookAndAddRecipe() async {
+        let trimmed = newCookbookName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            errorMessage = "Namnet kan inte vara tomt."
+            return
+        }
+
+        guard !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        let created: CookbookDTO
+        do {
+            created = try await APIClient.shared.createCookbook(name: trimmed, token: token)
+        } catch {
+            errorMessage = "Kunde inte skapa kokbok. \(APIError.userFacingMessage(for: error))"
+            return
+        }
+
+        do {
+            try await APIClient.shared.addRecipeToCookbook(
+                cookbookId: created.id,
+                recipeId: recipeId,
+                token: token
+            )
+            dismiss()
+        } catch {
+            errorMessage = "Kokbok skapad men kunde inte lägga till receptet. \(APIError.userFacingMessage(for: error))"
+            await loadCookbooks()
+        }
+    }
+
+    @MainActor
+    private func addRecipe(to cookbookId: Int) async {
+        guard !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        do {
+            try await APIClient.shared.addRecipeToCookbook(
+                cookbookId: cookbookId,
+                recipeId: recipeId,
+                token: token
+            )
+            dismiss()
+        } catch {
+            errorMessage = "Kunde inte lägga till receptet i kokboken. \(APIError.userFacingMessage(for: error))"
+        }
     }
 }
