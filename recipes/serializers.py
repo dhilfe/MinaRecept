@@ -3,6 +3,7 @@ from __future__ import annotations
 from rest_framework import serializers
 
 from .models import (
+    Cookbook,
     Recipe,
     ShoppingList,
     ShoppingListItem,
@@ -45,6 +46,31 @@ class RecipeSerializer(serializers.ModelSerializer):
         if request is None:
             return url
         return request.build_absolute_uri(url)
+
+
+class CookbookSerializer(serializers.ModelSerializer):
+    recipe_count = serializers.IntegerField(source='recipes.count', read_only=True)
+
+    def validate_name(self, value: str) -> str:
+        name = (value or '').strip()
+        if not name:
+            raise serializers.ValidationError('This field may not be blank.')
+
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if user and user.is_authenticated:
+            qs = Cookbook.objects.filter(user=user, name=name)
+            if self.instance is not None:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError('A cookbook with this name already exists.')
+
+        return name
+
+    class Meta:
+        model = Cookbook
+        fields = ['id', 'user', 'name', 'created_at', 'updated_at', 'recipe_count']
+        read_only_fields = ['user', 'created_at', 'updated_at', 'recipe_count']
 
 
 class ShoppingListSerializer(serializers.ModelSerializer):

@@ -46,6 +46,45 @@ class Recipe(models.Model):
     def __str__(self):
         return self.title
 
+
+class Cookbook(models.Model):
+    """A user-owned cookbook (collection of recipes)."""
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name="Användare")
+    name = models.CharField(max_length=120, verbose_name="Namn")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Skapad")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Uppdaterad")
+
+    recipes = models.ManyToManyField(
+        Recipe,
+        through='CookbookRecipe',
+        related_name='cookbooks',
+        blank=True,
+    )
+
+    class Meta:
+        verbose_name = "Kokbok"
+        verbose_name_plural = "Kokböcker"
+        ordering = ['-updated_at', '-created_at']
+        unique_together = ('user', 'name')
+
+    def __str__(self):
+        return self.name
+
+
+class CookbookRecipe(models.Model):
+    cookbook = models.ForeignKey(Cookbook, on_delete=models.CASCADE, related_name='cookbook_recipes')
+    recipe = models.ForeignKey(Recipe, on_delete=models.CASCADE, related_name='cookbook_recipes')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Skapad")
+
+    class Meta:
+        verbose_name = "Kokbok-recept"
+        verbose_name_plural = "Kokbok-recept"
+        unique_together = ('cookbook', 'recipe')
+
+    def __str__(self):
+        return f"{self.cookbook.name}: {self.recipe.title}"
+
 class WeeklyPlan(models.Model):
     """
     Represents a user's plan for a specific day of the week, linking a recipe to a day.
