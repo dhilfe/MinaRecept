@@ -171,10 +171,11 @@ struct RecipeDetailView: View {
                     }()
 
                     if isHeadingLine(ing: ing, text: text, nextText: nextText) {
-                        Text(text.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: ":")) + ":")
+                        Text(normalizeTrailingColon(text) + ":")
                             .font(.headline)
                             .padding(.vertical, 4)
                     } else {
+                        let displayText = normalizeTrailingColon(text)
                         Button {
                             if checkedIngredientIds.contains(ing.id) {
                                 checkedIngredientIds.remove(ing.id)
@@ -185,7 +186,7 @@ struct RecipeDetailView: View {
                             HStack(alignment: .firstTextBaseline, spacing: 10) {
                                 Image(systemName: checkedIngredientIds.contains(ing.id) ? "checkmark.square" : "square")
                                     .foregroundStyle(.secondary)
-                                Text(text)
+                                Text(displayText)
                                     .foregroundStyle(.primary)
                             }
                         }
@@ -240,11 +241,22 @@ struct RecipeDetailView: View {
 
     private func isHeadingLine(ing: IngredientDTO, text: String, nextText: String?) -> Bool {
         let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Only treat explicit ":"-suffix lines as headings.
-        // This avoids turning pantry items like "salt" into headings (which shows up as "salt:").
-        return s.hasSuffix(":")
+        guard s.hasSuffix(":") else { return false }
+
+        // If multiple consecutive lines end with ":", assume it's not intended as headings.
+        if let nextText {
+            let next = nextText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if next.hasSuffix(":") { return false }
+        }
+
+        return true
     }
 
+    private func normalizeTrailingColon(_ text: String) -> String {
+        text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+    }
     private func isHeadingStep(_ step: String) -> Bool {
         let s = step.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.hasSuffix(":") { return true }
