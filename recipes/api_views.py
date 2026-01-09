@@ -192,6 +192,30 @@ class RecipeViewSet(OwnedModelViewSet):
         
         return queryset
 
+    @action(detail=False, methods=['get'], url_path='tags')
+    def list_tags(self, request):
+        """Return the authenticated user's distinct tags.
+
+        Tags are stored as a comma-separated string on each Recipe.
+        This endpoint exists to make tag suggestions/autocomplete user-specific.
+        """
+        tags: list[str] = []
+        seen: set[str] = set()
+
+        for raw in self.get_queryset().exclude(tags='').values_list('tags', flat=True):
+            for part in (raw or '').split(','):
+                cleaned = part.strip()
+                if not cleaned:
+                    continue
+                key = cleaned.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                tags.append(cleaned)
+
+        tags.sort(key=lambda s: s.lower())
+        return Response({'tags': tags}, status=status.HTTP_200_OK)
+
     @action(detail=False, methods=['post'], url_path='import')
     def import_from_url(self, request):
         url = (request.data.get('url') or '').strip()
