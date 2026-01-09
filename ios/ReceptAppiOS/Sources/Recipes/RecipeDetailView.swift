@@ -590,17 +590,10 @@ private struct CookbookPickerSheet: View {
                             Button {
                                 Task { await addRecipe(to: cb.id) }
                             } label: {
-                                HStack {
-                                    Text(cb.name)
-                                        .foregroundStyle(.primary)
-                                    Spacer()
-                                    if let count = cb.recipeCount {
-                                        Text("\(count)")
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
+                                CookbookPickerRow(cookbook: cb)
                             }
                             .disabled(isLoading)
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -708,5 +701,54 @@ private struct CookbookPickerSheet: View {
         } catch {
             errorMessage = "Kunde inte lägga till receptet i kokboken. \(APIError.userFacingMessage(for: error))"
         }
+    }
+}
+
+private struct CookbookPickerRow: View {
+    let cookbook: CookbookDTO
+
+    private var imageURLs: [URL] {
+        cookbook.previewImageURLs ?? []
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.secondary.opacity(0.10))
+                .overlay {
+                    HStack(spacing: 0) {
+                        ForEach(Array(imageURLs.prefix(3).enumerated()), id: \.offset) { _, url in
+                            AsyncImage(url: url) { image in
+                                image.resizable().scaledToFill()
+                            } placeholder: {
+                                Color.secondary.opacity(0.15)
+                            }
+                        }
+                    }
+                    .clipped()
+                }
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(.secondary.opacity(0.15))
+                }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(cookbook.name)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                if let count = cookbook.recipeCount {
+                    Text("\(count) recept")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
