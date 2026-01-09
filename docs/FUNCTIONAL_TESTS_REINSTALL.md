@@ -2,6 +2,43 @@
 
 Syfte: snabb, reproducerbar checklista för att verifiera att app + backend fungerar korrekt efter att du installerat om appen (och ev. driftsatt senaste backend på stage/prod).
 
+## Bra att ha: backend-kommandon (Docker Compose)
+
+Kör i mappen där din `docker-compose.yml` ligger.
+
+- Status:
+  - `docker compose ps`
+  - `docker compose images`
+
+- Start (i bakgrunden):
+  - `docker compose up -d`
+
+- Stoppa:
+  - `docker compose down`
+
+- Rebuild + start (vanligast efter kodändring):
+  - `docker compose up -d --build`
+
+- Tvinga “ren” rebuild (om du misstänker cache-problem):
+  - `docker compose build --no-cache`
+  - `docker compose up -d`
+
+- Loggar:
+  - Alla services: `docker compose logs -f --tail=200`
+  - En specifik service (ex `web`): `docker compose logs -f --tail=200 web`
+
+- In i containern (ex `web`):
+  - `docker compose exec web bash`
+
+- Django-admin i container (ex `web`):
+  - Migrations: `docker compose exec web python manage.py migrate`
+  - Skapa migrations: `docker compose exec web python manage.py makemigrations`
+  - Collectstatic: `docker compose exec web python manage.py collectstatic --noinput`
+
+- Snabb felsökning:
+  - Se env i service: `docker compose exec web env | sort`
+  - Starta om bara `web`: `docker compose restart web`
+
 ## Förutsättningar
 - Du testar mot rätt miljö (t.ex. stage) och har nät.
 - Backend är uppdaterad och migrations är körda (om du nyss deployat).
