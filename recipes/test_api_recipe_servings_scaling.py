@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
+import json
 
 from recipes.models import Recipe
 
@@ -53,7 +54,8 @@ class RecipeServingsScalingApiTests(TestCase):
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["servings"], 8)
-        self.assertIn('"amount":"4"', resp.data["ingredients"])
+        ingredients = json.loads(resp.data["ingredients"])
+        self.assertEqual(ingredients[0]["amount"], "4")
 
     def test_patch_servings_does_not_rescale_if_client_sends_ingredients(self):
         recipe = Recipe.objects.create(
@@ -72,4 +74,5 @@ class RecipeServingsScalingApiTests(TestCase):
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["servings"], 8)
-        self.assertIn('"amount":"999"', resp.data["ingredients"])
+        ingredients = json.loads(resp.data["ingredients"])
+        self.assertEqual(ingredients[0]["amount"], "999")
