@@ -73,15 +73,17 @@ struct RecipeCreateView: View {
                         .frame(minHeight: 160)
                 }
 
-                if let errorMessage {
-                    Section {
-                        Text(errorMessage)
-                            .foregroundStyle(.red)
-                    }
-                }
             }
             .navigationTitle("Nytt recept")
             .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                if let errorMessage {
+                    Text(errorMessage)
+                        .frame(maxWidth: .infinity)
+                        .padding(12)
+                        .background(.thinMaterial)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Avbryt") { dismiss() }

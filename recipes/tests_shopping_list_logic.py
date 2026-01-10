@@ -53,6 +53,27 @@ class ShoppingListLogicTests(TestCase):
         self.assertIsNotNone(item)
         self.assertEqual(item.amount, "1")
 
+    def test_add_single_ingredient_to_main_list(self):
+        """Test that a single ingredient line can be added without importing all recipe ingredients."""
+        main_list = ShoppingList.objects.create(user=self.user, name="Main List", is_main=True)
+
+        recipe = Recipe.objects.create(
+            user=self.user,
+            title='Test Recipe',
+            ingredients='1 st gurka\n2 dl mjöl',
+            steps='Step 1',
+            cooking_time=10,
+            servings=2
+        )
+
+        url = reverse('recipe-add-ingredient-to-shopping-list', args=[recipe.pk])
+        response = self.client.post(url, data={'text': '2 dl mjöl'})
+        self.assertEqual(response.status_code, 200)
+
+        items = ShoppingListItem.objects.filter(shopping_list=main_list)
+        self.assertEqual(items.count(), 1)
+        self.assertEqual(items.first().name.lower(), 'mjöl')
+
     def test_multiple_lists_separation(self):
         """Test that main list and saved lists are separated."""
         main_list = ShoppingList.objects.create(user=self.user, name="Main", is_main=True)

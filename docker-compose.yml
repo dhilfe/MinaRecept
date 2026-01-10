@@ -8,11 +8,10 @@ services:
       - media_volume:/app/media
     expose:
       - 8000
-    environment:
-      - GIT_SHA=${GIT_SHA:-unknown}
     env_file:
       - .env
     environment:
+      - GIT_SHA=${GIT_SHA:-unknown}
       #- INSTAGRAM_SESSIONID=${INSTAGRAM_SESSIONID}
       - INSTAGRAM_COOKIES=${INSTAGRAM_COOKIES}
       #- INSTAGRAM_CSRFTOKEN=${INSTAGRAM_CSRFTOKEN}

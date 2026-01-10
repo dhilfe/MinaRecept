@@ -6,6 +6,7 @@ from rest_framework.routers import DefaultRouter
 
 from .api_views import (
     AppleLoginView,
+    CookbookViewSet,
     RecipeViewSet,
     ShoppingListItemViewSet,
     ShoppingListViewSet,
@@ -16,6 +17,7 @@ from .api_views import (
 
 router = DefaultRouter()
 router.register(r'recipes', RecipeViewSet, basename='recipe')
+router.register(r'cookbooks', CookbookViewSet, basename='cookbook')
 router.register(r'shopping-lists', ShoppingListViewSet, basename='shoppinglist')
 router.register(r'shopping-list-items', ShoppingListItemViewSet, basename='shoppinglistitem')
 router.register(r'weekly-plan', WeeklyPlanViewSet, basename='weeklyplan')

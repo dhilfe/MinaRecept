@@ -748,6 +748,7 @@ def recipe_import(request):
                             'description': "", # Keep description clean
                             'ingredients': '',
                             'steps': '',
+                            'tags': 'instagram',
                             'imported_text': full_text, # Raw text for the helper tool
                             'imported_image_url': post.url # URL for the image downloader
                         }
@@ -900,6 +901,9 @@ def recipe_import(request):
                     'cooking_time': cooking_time,
                     'servings': servings,
                 }
+
+                if 'instagram.com' in (url or '').lower():
+                    initial_data['tags'] = 'instagram'
 
                 if not initial_data['title'] and not initial_data['ingredients'].strip() and not initial_data['steps'].strip():
                     messages.error(request, "Kunde inte hämta recept: Hittade inget recept-innehåll på sidan. Prova en annan länk eller skapa receptet manuellt.")

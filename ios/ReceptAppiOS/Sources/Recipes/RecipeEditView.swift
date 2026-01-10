@@ -7,7 +7,8 @@ struct RecipeEditView: View {
 
     private let recipeId: Int
     private let initialDishType: String
-        private let initialTags: String
+    private let initialTags: String
+    private let initialServings: Int?
     private let onSaved: (RecipeDTO) -> Void
 
     @State private var title: String
@@ -15,8 +16,9 @@ struct RecipeEditView: View {
     @State private var ingredients: String
     @State private var steps: String
     @State private var cookingTimeMinutesText: String
+    @State private var servingsText: String
     @State private var dishType: String
-        @State private var tags: String
+    @State private var tags: String
 
     @State private var isSaving = false
     @State private var errorMessage: String? = nil
@@ -25,15 +27,17 @@ struct RecipeEditView: View {
         self.recipeId = recipe.id
         self.initialDishType = recipe.dishType ?? "lunch_dinner"
         self.onSaved = onSaved
-            self.initialTags = recipe.tags ?? ""
+        self.initialTags = recipe.tags ?? ""
+        self.initialServings = recipe.servings
 
         _title = State(initialValue: recipe.title)
         _description = State(initialValue: recipe.description ?? "")
         _ingredients = State(initialValue: recipe.ingredients ?? "")
         _steps = State(initialValue: recipe.steps ?? "")
         _cookingTimeMinutesText = State(initialValue: (recipe.cookingTime.map(String.init) ?? ""))
+        _servingsText = State(initialValue: (recipe.servings.map(String.init) ?? ""))
         _dishType = State(initialValue: recipe.dishType ?? "lunch_dinner")
-            _tags = State(initialValue: recipe.tags ?? "")
+        _tags = State(initialValue: recipe.tags ?? "")
     }
 
     var body: some View {
@@ -52,16 +56,19 @@ struct RecipeEditView: View {
                     TextField("Tid (minuter)", text: $cookingTimeMinutesText)
                         .keyboardType(.numberPad)
 
-                        TextField("Taggar (kommaseparerade)", text: $tags)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
-                        Text("Ex: middag, snabbt, vegetariskt")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    TextField("Portioner", text: $servingsText)
+                        .keyboardType(.numberPad)
 
-                        Button("Föreslå taggar") {
-                            tags = mergeSuggestedTags(into: tags)
-                        }
+                    TextField("Taggar (kommaseparerade)", text: $tags)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                    Text("Ex: middag, snabbt, vegetariskt")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Button("Föreslå taggar") {
+                        tags = mergeSuggestedTags(into: tags)
+                    }
                 }
 
                 Section("Beskrivning") {
@@ -87,15 +94,17 @@ struct RecipeEditView: View {
                         .frame(minHeight: 160)
                 }
 
-                if let errorMessage {
-                    Section {
-                        Text(errorMessage)
-                            .foregroundStyle(.red)
-                    }
-                }
             }
             .navigationTitle("Redigera")
             .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                if let errorMessage {
+                    Text(errorMessage)
+                        .frame(maxWidth: .infinity)
+                        .padding(12)
+                        .background(.thinMaterial)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Avbryt") { dismiss() }
@@ -145,17 +154,29 @@ struct RecipeEditView: View {
             return
         }
 
+        let servingsTrimmed = servingsText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if servingsTrimmed.isEmpty {
+            // Omit => unchanged.
+        } else if let servings = Int(servingsTrimmed), servings > 0 {
+            if initialServings != servings {
+                fields["servings"] = servings
+            }
+        } else {
+            errorMessage = "Portioner måste vara ett heltal."
+            return
+        }
+
         if dishType != initialDishType {
             fields["dish_type"] = dishType
         } else {
             // still allow explicitly setting, but safe to omit.
         }
 
-            let normalizedTags = normalizeTags(tags)
-            let normalizedInitialTags = normalizeTags(initialTags)
-            if normalizedTags != normalizedInitialTags {
-                fields["tags"] = normalizedTags
-            }
+        let normalizedTags = normalizeTags(tags)
+        let normalizedInitialTags = normalizeTags(initialTags)
+        if normalizedTags != normalizedInitialTags {
+            fields["tags"] = normalizedTags
+        }
 
         do {
             let updated = try await APIClient.shared.updateRecipe(id: recipeId, fields: fields, token: token)
@@ -219,21 +240,21 @@ struct RecipeEditView: View {
         return out.filter { seen.insert($0).inserted }
     }
 
-        private func normalizeTags(_ input: String) -> String {
-            let raw = input
-                .split(separator: ",")
-                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+    private func normalizeTags(_ input: String) -> String {
+        let raw = input
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
 
-            var seen: Set<String> = []
-            var out: [String] = []
-            for tag in raw {
-                let key = tag.lowercased()
-                if seen.contains(key) { continue }
-                seen.insert(key)
-                out.append(tag)
-            }
-            return out.joined(separator: ", ")
+        var seen: Set<String> = []
+        var out: [String] = []
+        for tag in raw {
+            let key = tag.lowercased()
+            if seen.contains(key) { continue }
+            seen.insert(key)
+            out.append(tag)
         }
+        return out.joined(separator: ", ")
+    }
 }
 

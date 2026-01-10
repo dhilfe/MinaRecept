@@ -3,11 +3,11 @@ import SwiftUI
 struct RecipeListView: View {
     @EnvironmentObject private var session: SessionController
     @Environment(\.openURL) private var openURL
-    @Environment(\.dismissSearch) private var dismissSearch
 
     let resetToken: Int
 
     @State private var recipes: [RecipeDTO] = []
+    @State private var cookbooks: [CookbookDTO] = []
     @State private var isLoading: Bool = false
     @State private var errorMessage: String? = nil
     @State private var searchText: String = ""
@@ -15,11 +15,41 @@ struct RecipeListView: View {
     @State private var path = NavigationPath()
     @State private var showCreateSheet: Bool = false
 
+    @State private var showCreateCookbookPrompt: Bool = false
+    @State private var newCookbookName: String = ""
+    @State private var isCreatingCookbook: Bool = false
+
+    @State private var selectedTags: Set<String> = []
+
+    @FocusState private var isSearchFocused: Bool
+
+    private enum TopSection: String, CaseIterable, Identifiable {
+        case myRecipes = "Mina recept"
+        case inspiration = "Inspiration"
+        case following = "Följer"
+
+        var id: String { rawValue }
+    }
+
+    private enum CollectionSegment: String, CaseIterable, Identifiable {
+        case saved = "Sparade"
+        case liked = "Gillade"
+        case shared = "Delade"
+
+        var id: String { rawValue }
+    }
+
+    @State private var topSection: TopSection = .myRecipes
+    @State private var collectionSegment: CollectionSegment = .saved
+    @State private var showFilters: Bool = false
+
     private func performHomeReset() {
         path = NavigationPath()
         searchText = ""
         selectedCategory = nil
-        dismissSearch()
+        selectedTags = []
+        showFilters = false
+        isSearchFocused = false
     }
 
     private func searchTokens(from rawQuery: String) -> [String] {
@@ -56,9 +86,164 @@ struct RecipeListView: View {
         }
     }
 
+    private var tagFilteredRecipes: [RecipeDTO] {
+        guard !selectedTags.isEmpty else { return searchedRecipes }
+        let selected = selectedTags.map { $0.lowercased() }
+
+        return searchedRecipes.filter { recipe in
+            let recipeTags = Set(tagsList(for: recipe).map { $0.lowercased() })
+            return selected.allSatisfy { recipeTags.contains($0) }
+        }
+    }
+
     private var filteredRecipes: [RecipeDTO] {
-        guard let selectedCategory else { return searchedRecipes }
-        return searchedRecipes.filter { categoryName(for: $0) == selectedCategory }
+        let base = tagFilteredRecipes
+        guard let selectedCategory else { return base }
+        return base.filter { categoryName(for: $0) == selectedCategory }
+    }
+
+    private var displayedRecipes: [RecipeDTO] {
+        filteredRecipes
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+
+    private var availableTags: [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+
+        for recipe in searchedRecipes {
+            for tag in tagsList(for: recipe) {
+                let cleaned = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !cleaned.isEmpty else { continue }
+                let key = cleaned.lowercased()
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
+                out.append(cleaned)
+            }
+        }
+
+        out.sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        return out
+    }
+
+    private struct RecipeRow: View {
+        let recipe: RecipeDTO
+        let tags: [String]
+
+        var body: some View {
+            HStack(alignment: .top, spacing: 12) {
+                if let url = recipe.preferredImageURL {
+                    AsyncImage(url: url) { image in
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } placeholder: {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.secondary.opacity(0.15))
+                    }
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(.secondary.opacity(0.15))
+                    }
+                } else {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.secondary.opacity(0.10))
+                        .frame(width: 64, height: 64)
+                        .overlay {
+                            Image(systemName: "fork.knife")
+                                .foregroundStyle(.secondary)
+                        }
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(recipe.title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+
+                    if !tags.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(tags.prefix(6), id: \.self) { tag in
+                                    Text(tag)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 4)
+                                        .background(.thinMaterial)
+                                        .clipShape(Capsule())
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private struct CookbookCard: View {
+        let title: String
+        let imageURLs: [URL]
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 10) {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.secondary.opacity(0.10))
+                    .overlay {
+                        HStack(spacing: 0) {
+                            ForEach(Array(imageURLs.prefix(3).enumerated()), id: \.offset) { _, url in
+                                AsyncImage(url: url) { image in
+                                    image.resizable().scaledToFill()
+                                } placeholder: {
+                                    Color.secondary.opacity(0.15)
+                                }
+                            }
+                        }
+                        .clipped()
+                    }
+                    .frame(width: 120, height: 88)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14)
+                            .strokeBorder(.secondary.opacity(0.15))
+                    }
+
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private struct CreateCookbookCard: View {
+        var body: some View {
+            VStack(alignment: .leading, spacing: 10) {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.secondary.opacity(0.10))
+                    .overlay {
+                        Image(systemName: "plus")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(width: 120, height: 88)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14)
+                            .strokeBorder(.secondary.opacity(0.15))
+                    }
+
+                Text("Skapa")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+        }
     }
 
     private var categoryNames: [String] {
@@ -74,74 +259,142 @@ struct RecipeListView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            VStack(spacing: 0) {
-                categoryFilterBar
+            List {
+                Section {
+                    Picker("", selection: $topSection) {
+                        ForEach(TopSection.allCases) { section in
+                            Text(section.rawValue).tag(section)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))
 
-                if recipes.isEmpty && !isLoading && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    EmptyStateView(
-                        iconName: "fork.knife",
-                        title: "Inga recept än",
-                        message: "Spara dina favoritrecept från webben genom att dela dem till MinaRecept.",
-                        actionTitle: nil,
-                        action: nil
-                    )
-                } else {
-                    List {
-                        if searchedRecipes.isEmpty {
-                            Section {
-                                if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                    Text("Inga recept hittades.")
-                                        .foregroundStyle(.secondary)
-                                } else {
-                                    Text("Inga recept matchar \"\(searchText)\".")
-                                        .foregroundStyle(.secondary)
-                                    Button("Sök på Google efter \"\(searchText)\"") {
-                                        openGoogleSearch(query: searchText)
-                                    }
+                if topSection == .myRecipes {
+                    Section("Dina kokböcker") {
+                        let urls = recipes.compactMap { $0.preferredImageURL }
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 14) {
+                                Button {
+                                    // Users expect this to always show their recipes.
+                                    topSection = .myRecipes
+                                    collectionSegment = .saved
+                                    searchText = ""
+                                    selectedCategory = nil
+                                    selectedTags = []
+                                    showFilters = false
+                                    isSearchFocused = false
+                                } label: {
+                                    CookbookCard(title: "Alla recept", imageURLs: urls)
                                 }
+                                .buttonStyle(.plain)
+
+                                ForEach(cookbooks) { cookbook in
+                                    Button {
+                                        path.append(cookbook)
+                                    } label: {
+                                        CookbookCard(title: cookbook.name, imageURLs: cookbook.previewImageURLs ?? [])
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+
+                                Button {
+                                    showCreateCookbookPrompt = true
+                                } label: {
+                                    CreateCookbookCard()
+                                }
+                                .buttonStyle(.plain)
                             }
-                        } else if filteredRecipes.isEmpty {
-                            Section {
-                                Text("Inga recept i vald kategori.")
+                            .padding(.vertical, 4)
+                        }
+                    }
+
+                    Section {
+                        Picker("", selection: $collectionSegment) {
+                            ForEach(CollectionSegment.allCases) { segment in
+                                Text(segment.rawValue).tag(segment)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+
+                    Section {
+                        HStack(spacing: 10) {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundStyle(.secondary)
+                            TextField("Sök recept…", text: $searchText)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled(true)
+                                .focused($isSearchFocused)
+
+                            Button {
+                                showFilters.toggle()
+                            } label: {
+                                Image(systemName: "slider.horizontal.3")
                                     .foregroundStyle(.secondary)
                             }
-                        } else {
-                            ForEach(sectionCategoryNames, id: \.self) { category in
-                                Section(category) {
-                                    let sectionRecipes = filteredRecipes
-                                        .filter { categoryName(for: $0) == category }
-                                        .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color.secondary.opacity(0.10))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
 
-                                    ForEach(sectionRecipes) { recipe in
-                                        NavigationLink(value: recipe) {
-                                            HStack(spacing: 12) {
-                                                if let url = recipe.preferredImageURL {
-                                                    AsyncImage(url: url) { image in
-                                                        image
-                                                            .resizable()
-                                                            .scaledToFill()
-                                                    } placeholder: {
-                                                        Color.secondary.opacity(0.2)
-                                                    }
-                                                    .frame(width: 56, height: 56)
-                                                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                                                }
+                        if showFilters {
+                            categoryFilterBar
+                            tagFilterBar
+                        }
+                    }
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
 
-                                                VStack(alignment: .leading) {
-                                                    Text(recipe.title)
-                                                        .font(.headline)
-                                                }
-                                            }
-                                        }
-                                    }
-                                    .onDelete { offsets in
-                                        deleteRecipes(in: sectionRecipes, at: offsets)
-                                    }
+                    if collectionSegment != .saved {
+                        Section {
+                            Text("Kommer snart")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if recipes.isEmpty && !isLoading && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Section {
+                            EmptyStateView(
+                                iconName: "fork.knife",
+                                title: "Inga recept än",
+                                message: "Spara dina favoritrecept från webben genom att dela dem till MinaRecept.",
+                                actionTitle: nil,
+                                action: nil
+                            )
+                        }
+                    } else if searchedRecipes.isEmpty {
+                        Section {
+                            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text("Inga recept hittades.")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Inga recept matchar \"\(searchText)\".")
+                                    .foregroundStyle(.secondary)
+                                Button("Sök på Google efter \"\(searchText)\"") {
+                                    openGoogleSearch(query: searchText)
                                 }
                             }
                         }
+                    } else if displayedRecipes.isEmpty {
+                        Section {
+                            Text("Inga recept i vald kategori.")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Section {
+                            ForEach(displayedRecipes) { recipe in
+                                NavigationLink(value: recipe) {
+                                    RecipeRow(recipe: recipe, tags: tagsList(for: recipe))
+                                }
+                            }
+                            .onDelete { offsets in
+                                deleteRecipes(in: displayedRecipes, at: offsets)
+                            }
+                        }
 
-                        // Always offer Google search when user has typed something, even if we have local matches.
                         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             Section {
                                 Button("Sök på Google efter \"\(searchText)\"") {
@@ -152,12 +405,22 @@ struct RecipeListView: View {
                             }
                         }
                     }
+                } else {
+                    Section {
+                        Text("Kommer snart")
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
-            .navigationTitle("Mina recept")
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Sök recept")
+            .navigationTitle("Hem")
+            .listStyle(.insetGrouped)
+            .scrollDismissesKeyboard(.immediately)
             .navigationDestination(for: RecipeDTO.self) { recipe in
                 RecipeDetailView(recipe: recipe)
+            }
+            .navigationDestination(for: CookbookDTO.self) { cookbook in
+                CookbookRecipesView(cookbook: cookbook)
+                    .environmentObject(session)
             }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
@@ -167,7 +430,11 @@ struct RecipeListView: View {
                         Image(systemName: "plus")
                     }
 
-                    Button("Logga ut") { session.logout() }
+                    Menu {
+                        Button("Logga ut", role: .destructive) { session.logout() }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
                 }
 
                 if isLoading {
@@ -197,6 +464,13 @@ struct RecipeListView: View {
                         .background(.thinMaterial)
                 }
             }
+            .alert("Ge din nya kokbok ett namn", isPresented: $showCreateCookbookPrompt) {
+                TextField("Namn", text: $newCookbookName)
+                Button("Avbryt", role: .cancel) { }
+                Button("Lägg till") {
+                    Task { await createCookbook() }
+                }
+            }
             .background(
                 TabReselectDetector { _ in
                     performHomeReset()
@@ -205,6 +479,9 @@ struct RecipeListView: View {
             )
             .onChange(of: resetToken) { _ in
                 performHomeReset()
+            }
+            .onChange(of: topSection) { _ in
+                isSearchFocused = false
             }
             .onChange(of: searchText) { _ in
                 if let selectedCategory, !categoryNames.contains(selectedCategory) {
@@ -218,13 +495,6 @@ struct RecipeListView: View {
         }
     }
 
-    private var sectionCategoryNames: [String] {
-        if let selectedCategory {
-            return [selectedCategory]
-        }
-        return categoryNames
-    }
-
     @ViewBuilder
     private var categoryFilterBar: some View {
         if !categoryNames.isEmpty {
@@ -234,13 +504,11 @@ struct RecipeListView: View {
                         if selectedCategory == nil {
                             Button("Alla") {
                                 selectedCategory = nil
-                                dismissSearch()
                             }
                             .buttonStyle(.borderedProminent)
                         } else {
                             Button("Alla") {
                                 selectedCategory = nil
-                                dismissSearch()
                             }
                             .buttonStyle(.bordered)
                         }
@@ -251,13 +519,53 @@ struct RecipeListView: View {
                             if selectedCategory == category {
                                 Button(category) {
                                     selectedCategory = category
-                                    dismissSearch()
                                 }
                                 .buttonStyle(.borderedProminent)
                             } else {
                                 Button(category) {
                                     selectedCategory = category
-                                    dismissSearch()
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var tagFilterBar: some View {
+        if !availableTags.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Group {
+                        if selectedTags.isEmpty {
+                            Button("Alla taggar") {
+                                selectedTags = []
+                            }
+                            .buttonStyle(.borderedProminent)
+                        } else {
+                            Button("Alla taggar") {
+                                selectedTags = []
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+
+                    ForEach(availableTags, id: \.self) { tag in
+                        let key = tag.lowercased()
+                        Group {
+                            if selectedTags.contains(key) {
+                                Button("#\(tag)") {
+                                    selectedTags.remove(key)
+                                }
+                                .buttonStyle(.borderedProminent)
+                            } else {
+                                Button("#\(tag)") {
+                                    selectedTags.insert(key)
                                 }
                                 .buttonStyle(.bordered)
                             }
@@ -296,8 +604,32 @@ struct RecipeListView: View {
 
         do {
             recipes = try await APIClient.shared.fetchRecipes(token: token)
+            cookbooks = try await APIClient.shared.fetchCookbooks(token: token)
         } catch {
             errorMessage = APIError.userFacingMessage(for: error)
+        }
+    }
+
+    @MainActor
+    private func createCookbook() async {
+        guard let token = session.token else { return }
+        let trimmed = newCookbookName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            errorMessage = "Namnet kan inte vara tomt."
+            return
+        }
+        guard !isCreatingCookbook else { return }
+
+        isCreatingCookbook = true
+        errorMessage = nil
+        defer { isCreatingCookbook = false }
+
+        do {
+            _ = try await APIClient.shared.createCookbook(name: trimmed, token: token)
+            newCookbookName = ""
+            cookbooks = try await APIClient.shared.fetchCookbooks(token: token)
+        } catch {
+            errorMessage = "Kunde inte skapa kokbok. \(APIError.userFacingMessage(for: error))"
         }
     }
 

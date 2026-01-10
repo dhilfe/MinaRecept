@@ -16,19 +16,19 @@ struct MainTabView: View {
         TabView(selection: $selectedTab) {
             RecipeListView(resetToken: recipesResetToken)
                 .tabItem {
-                    Label("Mina recept", systemImage: "book")
+                    Label("Hem", systemImage: "house")
                 }
                 .tag(Tab.recipes)
 
             WeeklyPlanView()
                 .tabItem {
-                    Label("Veckoplan", systemImage: "calendar")
+                    Label("Planera", systemImage: "calendar")
                 }
                 .tag(Tab.weeklyPlan)
 
             ShoppingListsView()
                 .tabItem {
-                    Label("Inköpslistor", systemImage: "cart")
+                    Label("Handla", systemImage: "cart")
                 }
                 .tag(Tab.shoppingLists)
         }

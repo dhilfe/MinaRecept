@@ -35,6 +35,7 @@ struct WeeklyPlanView: View {
                         ForEach(dayItems) { item in
                             NavigationLink(destination: RecipeDetailLoader(recipeId: item.recipe)) {
                                 Text(item.recipeTitle)
+                                    .font(.body)
                             }
                         }
                         .onDelete { indexSet in
@@ -52,6 +53,7 @@ struct WeeklyPlanView: View {
                 }
             }
             .navigationTitle("Veckoplan")
+            .listStyle(.insetGrouped)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {

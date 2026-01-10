@@ -19,10 +19,21 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Recipe, ShoppingList, ShoppingListItem, ShoppingListRecipeSource, WeeklyMenu, WeeklyMenuItem, WeeklyPlan
+from .models import (
+    Cookbook,
+    CookbookRecipe,
+    Recipe,
+    ShoppingList,
+    ShoppingListItem,
+    ShoppingListRecipeSource,
+    WeeklyMenu,
+    WeeklyMenuItem,
+    WeeklyPlan,
+)
 from .importing import import_recipe_from_url
-from .services import add_ingredients_to_list
+from .services import add_ingredients_to_list, parse_legacy_ingredient_line, upsert_shopping_list_item
 from .serializers import (
+    CookbookSerializer,
     RecipeSerializer,
     ShoppingListItemSerializer,
     ShoppingListSerializer,
@@ -261,6 +272,10 @@ class RecipeViewSet(OwnedModelViewSet):
             return ", ".join(out)
 
         requested_tags = normalize_tags((request.data.get("tags") or "").strip())
+
+        # Always tag Instagram imports for easy filtering (requested feature).
+        if 'instagram.com' in url.lower():
+            requested_tags = normalize_tags(",".join([requested_tags, "instagram"]))
 
         recipe = Recipe.objects.create(
             user=request.user,
@@ -1149,6 +1164,10 @@ class RecipeViewSet(OwnedModelViewSet):
         if requested_tags:
             extracted_tags = normalize_tags(",".join([extracted_tags, requested_tags]))
 
+        # Always tag Instagram imports for easy filtering (requested feature).
+        if is_instagram:
+            extracted_tags = normalize_tags(",".join([extracted_tags, "instagram"]))
+
         recipe = Recipe.objects.create(
             user=request.user,
             title=title or "Importerad bild",
@@ -1197,6 +1216,78 @@ class RecipeViewSet(OwnedModelViewSet):
             return Response({'detail': 'Ingredients already added to this list.', 'result': result}, status=status.HTTP_200_OK)
             
         return Response({'detail': 'Ingredients added.', 'result': result}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='add-ingredient-to-shopping-list')
+    def add_ingredient_to_shopping_list(self, request, pk=None):
+        recipe = self.get_object()
+        list_id = request.data.get('shopping_list_id')
+
+        if not list_id:
+            # Default to main list
+            shopping_list = ShoppingList.objects.filter(user=request.user, is_main=True).first()
+            if not shopping_list:
+                shopping_list = ShoppingList.objects.create(user=request.user, name="Inköpslista", is_main=True)
+        else:
+            try:
+                shopping_list = ShoppingList.objects.get(id=list_id, user=request.user)
+            except ShoppingList.DoesNotExist:
+                return Response({'detail': 'Shopping list not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        text = (request.data.get('text') or request.data.get('ingredient') or '').strip()
+        if not text:
+            return Response({'detail': 'Missing text.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        parsed = parse_legacy_ingredient_line(text)
+        if parsed is None:
+            return Response({'detail': 'Invalid ingredient.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        name, amount, unit = parsed
+        item, created = upsert_shopping_list_item(
+            request.user,
+            shopping_list,
+            name,
+            amount,
+            unit,
+            recipe=recipe,
+        )
+        if not item:
+            return Response({'detail': 'Invalid ingredient.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {
+                'detail': 'Ingredient added.',
+                'item_id': item.id,
+                'created': bool(created),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class CookbookViewSet(OwnedModelViewSet):
+    queryset = Cookbook.objects.all().order_by('-updated_at', '-created_at')
+    serializer_class = CookbookSerializer
+
+    @action(detail=True, methods=['get'], url_path='recipes')
+    def recipes(self, request, pk=None):
+        cookbook: Cookbook = self.get_object()
+        qs = cookbook.recipes.all().order_by('-updated_at', '-created_at')
+        serializer = RecipeSerializer(qs, many=True, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='add-recipe')
+    def add_recipe(self, request, pk=None):
+        cookbook: Cookbook = self.get_object()
+        recipe_id = request.data.get('recipe_id')
+        if not recipe_id:
+            return Response({'detail': 'Missing recipe_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            recipe = Recipe.objects.get(id=recipe_id, user=request.user)
+        except Recipe.DoesNotExist:
+            return Response({'detail': 'Recipe not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        CookbookRecipe.objects.get_or_create(cookbook=cookbook, recipe=recipe)
+        return Response({'detail': 'Recipe added.'}, status=status.HTTP_200_OK)
 
 
 class ShoppingListViewSet(OwnedModelViewSet):
